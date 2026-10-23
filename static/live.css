@@ -44,3 +44,42 @@
   text-align: center;
   padding: 64px 0;
 }
+
+.live-card {
+  --status-color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--glass-border);
+  border-left: 4px solid var(--status-color);
+  border-radius: 12px;
+}
+
+.live-status-waiting { --status-color: var(--neon-gold); }
+.live-status-working { --status-color: var(--neon-green); }
+.live-status-idle { --status-color: var(--accent-cyan); }
+
+.live-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.live-card-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.live-card-state {
+  color: var(--status-color);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.live-card-meta {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

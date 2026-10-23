@@ -2,8 +2,112 @@
 //! 即時狀態不進資料庫，每次請求即時讀取。
 
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::Path;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveSession {
+    agent: &'static str,
+    id: String,
+    name: Option<String>,
+    folder: String,
+    status: &'static str,
+    updated_at: u64,
+}
+
+/// Claude Code 自己維護的 session 登記檔（`<CLAUDE_DIR>/sessions/<pid>.json`）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Registered {
+    pid: u32,
+    session_id: String,
+    cwd: String,
+    name: Option<String>,
+    status: Option<String>,
+    updated_at: Option<u64>,
+    kind: Option<String>,
+    entrypoint: Option<String>,
+}
+
+impl Registered {
+    /// 互動式、還在執行的 session；`claude -p` 這類背景執行不算。
+    fn is_open(&self) -> bool {
+        self.kind
+            .as_deref()
+            .is_none_or(|kind| kind == "interactive")
+            && self.entrypoint.as_deref() != Some("sdk-cli")
+            && pid_alive(self.pid)
+    }
+}
 
 pub async fn get_live() -> Json<Value> {
-    Json(json!({ "live": [], "recent": [] }))
+    let live = tokio::task::spawn_blocking(|| claude_sessions(&crate::db::get_claude_dir()))
+        .await
+        .unwrap_or_default();
+    Json(json!({ "live": live, "recent": [] }))
+}
+
+fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
+    let Ok(entries) = std::fs::read_dir(claude_dir.join("sessions")) else {
+        return Vec::new();
+    };
+    let mut sessions: Vec<LiveSession> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        // 只讀 .json：同資料夾內的 .key 是機密，絕不開啟
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|text| serde_json::from_str::<Registered>(&text).ok())
+        .filter(Registered::is_open)
+        .map(into_live_session)
+        .collect();
+    sessions.sort_by(|a, b| {
+        status_rank(a.status)
+            .cmp(&status_rank(b.status))
+            .then(b.updated_at.cmp(&a.updated_at))
+    });
+    sessions
+}
+
+fn into_live_session(registered: Registered) -> LiveSession {
+    let folder = Path::new(&registered.cwd).file_name().map_or_else(
+        || registered.cwd.clone(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    LiveSession {
+        agent: "claude",
+        id: registered.session_id,
+        name: registered.name.filter(|name| !name.is_empty()),
+        folder,
+        // ponytail: 登記檔只有 busy／idle／shell，shell 視為工作中；其餘一律當閒置
+        status: match registered.status.as_deref() {
+            Some("busy" | "shell") => "working",
+            _ => "idle",
+        },
+        updated_at: registered.updated_at.unwrap_or(0),
+    }
+}
+
+/// 排序用：等你回覆 > 工作中 > 閒置。
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "waiting" => 0,
+        "working" => 1,
+        _ => 2,
+    }
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    // 與 updater 內私有的 is_process_alive 相同；複製而不改動上游檔案
+    let res = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    res == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+// ponytail: 目前只支援 macOS／Linux；其他平台一律視為沒有進行中的 session
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    false
 }

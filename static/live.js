@@ -6,9 +6,33 @@ const cards = document.getElementById('live-cards');
 const empty = document.getElementById('live-empty');
 const status = document.getElementById('live-status');
 
+const AGENT_LABEL = { claude: 'Claude Code', codex: 'Codex' };
+const STATUS_LABEL = { waiting: '等你回覆', working: '工作中', idle: '閒置' };
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
+// 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
+function renderCard(session) {
+  const card = element('article', `live-card live-status-${session.status}`);
+  const head = element('div', 'live-card-head');
+  head.append(
+    element('span', 'live-card-title', session.name || session.folder),
+    element('span', 'live-card-state', `● ${STATUS_LABEL[session.status] || session.status}`),
+  );
+  const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
+  card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
+  return card;
+}
+
 function render(data) {
   empty.hidden = data.live.length > 0;
   cards.hidden = data.live.length === 0;
+  cards.replaceChildren(...data.live.map(renderCard));
   status.textContent = '';
 }
 

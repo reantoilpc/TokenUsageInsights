@@ -4,7 +4,7 @@
 //! 並把假的 `ps`／`lsof`／`osascript` 放在 PATH 最前面（腳本依劇本回答，並記錄收到的參數）。
 //! 輔助程式刻意獨立於 `additional_sources.rs`，避免與上游對該檔的修改衝突。
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -64,10 +64,16 @@ struct LiveServer {
     url: String,
     port: u16,
     fake: FakeCommands,
+    /// 測試用的「還活著的程序」，結束時一併清掉。
+    sleepers: Vec<Child>,
 }
 
 impl Drop for LiveServer {
     fn drop(&mut self) {
+        for sleeper in &mut self.sleepers {
+            let _ = sleeper.kill();
+            let _ = sleeper.wait();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.root);
@@ -76,7 +82,19 @@ impl Drop for LiveServer {
 
 impl LiveServer {
     /// 啟動伺服器。`host` 為 `None` 時不設定 `HOST`，用來驗證預設綁定位址。
+    /// 並行測試可能挑到同一個空閒埠而讓其中一台啟動失敗，所以失敗時換埠重試。
     async fn start(host: Option<&str>) -> Self {
+        let mut last_log = String::new();
+        for _ in 0..5 {
+            match Self::try_start(host).await {
+                Ok(server) => return server,
+                Err(log) => last_log = log,
+            }
+        }
+        panic!("startup failed: {last_log}");
+    }
+
+    async fn try_start(host: Option<&str>) -> Result<Self, String> {
         let root = std::env::temp_dir().join(format!(
             "insights-live-{}-{}-{}",
             std::process::id(),
@@ -95,6 +113,7 @@ impl LiveServer {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
+        let log = fs::File::create(root.join("server.log")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_token-usage-insights"));
         command
             .env_clear()
@@ -106,10 +125,8 @@ impl LiveServer {
             .env("CODEX_DIR", root.join("codex"))
             .arg("--no-auto-update")
             .stdin(Stdio::null())
-            .stdout(Stdio::from(
-                fs::File::create(root.join("server.log")).unwrap(),
-            ))
-            .stderr(Stdio::null());
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log));
         if let Some(host) = host {
             command.env("HOST", host);
         }
@@ -119,12 +136,13 @@ impl LiveServer {
             url: format!("http://127.0.0.1:{port}"),
             port,
             fake,
+            sleepers: Vec::new(),
         };
-        server.wait_until_ready().await;
-        server
+        server.wait_until_ready().await?;
+        Ok(server)
     }
 
-    async fn wait_until_ready(&mut self) {
+    async fn wait_until_ready(&mut self) -> Result<(), String> {
         let client = client();
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
@@ -134,15 +152,37 @@ impl LiveServer {
                 .await
                 .is_ok_and(|response| response.status().is_success())
             {
-                return;
+                return Ok(());
             }
-            assert!(
-                Instant::now() < deadline && self.child.try_wait().unwrap().is_none(),
-                "startup failed: {}",
-                fs::read_to_string(self.root.join("server.log")).unwrap_or_default()
-            );
+            if Instant::now() >= deadline || self.child.try_wait().unwrap().is_some() {
+                return Err(fs::read_to_string(self.root.join("server.log")).unwrap_or_default());
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// 啟動一個會睡著的程序，回傳它的 pid，代表「還活著的 Claude Code 程序」。
+    fn alive_pid(&mut self) -> u32 {
+        let child = Command::new("sleep").arg("600").spawn().unwrap();
+        let pid = child.id();
+        self.sleepers.push(child);
+        pid
+    }
+
+    /// 回傳一個已經結束的程序的 pid，代表「已經關掉的 Claude Code」。
+    fn dead_pid(&self) -> u32 {
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    /// 寫入一筆 Claude Code 的 session 登記檔（`<CLAUDE_DIR>/sessions/<pid>.json`）。
+    fn claude_session(&self, pid: u32, mut fields: Value) {
+        fields["pid"] = json!(pid);
+        let dir = self.root.join("claude/sessions");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{pid}.json")), fields.to_string()).unwrap();
     }
 
     async fn get_text(&self, path: &str) -> (u16, String) {
@@ -235,4 +275,109 @@ async fn fake_commands_answer_from_the_script_and_record_their_arguments() {
         "  101 ttys001 codex resume\n"
     );
     assert_eq!(server.fake.calls("ps"), vec!["-axo pid,tty,command"]);
+}
+
+fn registered(id: &str, cwd: &str, status: &str, updated_at: u64) -> Value {
+    json!({"sessionId":id,"cwd":cwd,"status":status,"updatedAt":updated_at,"kind":"interactive","entrypoint":"cli"})
+}
+
+#[tokio::test]
+async fn open_claude_sessions_are_listed_with_name_folder_and_status() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let (busy, idle) = (server.alive_pid(), server.alive_pid());
+    let mut named = registered("s-busy", "/work/mango-hsu", "busy", 2000);
+    named["name"] = json!("芒果許訂購系統");
+    server.claude_session(busy, named);
+    server.claude_session(idle, registered("s-idle", "/work/erp", "idle", 1000));
+
+    let live = server.live().await;
+    let items = live["live"].as_array().unwrap();
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["agent"], "claude");
+    assert_eq!(items[0]["id"], "s-busy");
+    assert_eq!(items[0]["name"], "芒果許訂購系統");
+    assert_eq!(items[0]["folder"], "mango-hsu");
+    assert_eq!(items[0]["status"], "working");
+    assert_eq!(items[1]["id"], "s-idle");
+    assert_eq!(items[1]["name"], Value::Null);
+    assert_eq!(items[1]["folder"], "erp");
+    assert_eq!(items[1]["status"], "idle");
+}
+
+#[tokio::test]
+async fn a_registry_entry_whose_process_is_gone_is_not_live() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let alive = server.alive_pid();
+    let gone = server.dead_pid();
+    server.claude_session(alive, registered("s-alive", "/work/erp", "idle", 1000));
+    server.claude_session(gone, registered("s-gone", "/work/old", "busy", 2000));
+
+    let live = server.live().await;
+
+    let ids: Vec<&Value> = live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| &item["id"])
+        .collect();
+    assert_eq!(ids, vec!["s-alive"]);
+}
+
+#[tokio::test]
+async fn background_runs_are_not_live_sessions() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let (interactive, headless) = (server.alive_pid(), server.alive_pid());
+    server.claude_session(interactive, registered("s-cli", "/work/erp", "idle", 1000));
+    let mut background = registered("s-p", "/work/erp", "busy", 3000);
+    background["entrypoint"] = json!("sdk-cli");
+    background["kind"] = json!("headless");
+    server.claude_session(headless, background);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"].as_array().unwrap().len(), 1);
+    assert_eq!(live["live"][0]["id"], "s-cli");
+}
+
+#[tokio::test]
+async fn secret_key_files_next_to_the_registry_never_leak_into_the_response() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    fs::write(
+        server.root.join(format!("claude/sessions/{pid}.key")),
+        r#"{"sessionId":"s-secret","cwd":"/work/secret","status":"busy","pid":1,"secret":"SENTINEL-KEY"}"#,
+    )
+    .unwrap();
+
+    let (_, body) = server.get_text("/api/live").await;
+
+    assert!(!body.contains("SENTINEL-KEY"));
+    assert!(!body.contains("s-secret"));
+    assert!(body.contains("s-1"));
+}
+
+#[tokio::test]
+async fn live_sessions_are_ordered_by_status_then_most_recent_activity() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    for (id, status, updated_at) in [
+        ("idle-new", "idle", 9000),
+        ("busy-old", "busy", 1000),
+        ("idle-old", "idle", 2000),
+        ("shell-new", "shell", 5000),
+    ] {
+        let pid = server.alive_pid();
+        server.claude_session(pid, registered(id, "/work/erp", status, updated_at));
+    }
+
+    let live = server.live().await;
+
+    let ids: Vec<&Value> = live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| &item["id"])
+        .collect();
+    assert_eq!(ids, vec!["shell-new", "busy-old", "idle-new", "idle-old"]);
 }
