@@ -21,6 +21,7 @@ mod copilot;
 mod db;
 mod grok;
 mod handlers;
+mod live;
 mod mcode;
 mod muse;
 mod omp;
@@ -40,7 +41,8 @@ mod vscode;
 use handlers::*;
 
 const MAX_IMPORT_PAYLOAD_BYTES: usize = 200_000_000;
-const DEFAULT_BIND_HOST: &str = "0.0.0.0";
+// 預設只接受本機連線；需要區網存取時以 HOST 環境變數覆寫
+const DEFAULT_BIND_HOST: &str = "127.0.0.1";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ISO date (YYYY-MM-DD) of the source commit, or empty when git metadata was unavailable.
 const APP_BUILD_DATE: &str = env!("APP_BUILD_DATE");
@@ -340,6 +342,7 @@ async fn main() {
     // 建立 Axum 路由，支援帶助理前綴的 API 及 fallback 相容 API
     let app = Router::new()
         .route("/api/version", get(get_app_version))
+        .route("/api/live", get(live::get_live))
         // 帶 :assistant 變數的路由
         .route("/api/:assistant/dates", get(get_available_dates))
         .route("/api/:assistant/setup-info", get(get_setup_info))

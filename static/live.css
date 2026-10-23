@@ -1,0 +1,46 @@
+/* 「進行中」頁面：沿用看板的主題變數（深色／淺色），卡片依寬度自動多欄。 */
+.live-main {
+  height: 100dvh;
+  overflow-y: auto;
+  padding: var(--space-5, 24px);
+  box-sizing: border-box;
+}
+
+.live-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.live-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.live-back {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.live-back:hover {
+  color: var(--text-primary);
+}
+
+.live-status {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.live-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.live-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 64px 0;
+}

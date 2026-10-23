@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>進行中 · Token 戰情室</title>
+  <link rel="icon" type="image/x-icon" href="/static/favicon-v2.ico">
+  <script>
+    document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  </script>
+  <link rel="stylesheet" href="/static/styles.css?v=37">
+  <link rel="stylesheet" href="/static/live.css?v=1">
+</head>
+<body>
+  <main class="live-main">
+    <header class="live-header">
+      <a class="live-back" href="/">← Token 戰情室</a>
+      <h1>進行中</h1>
+      <span id="live-status" class="live-status" role="status"></span>
+    </header>
+    <section aria-label="進行中的 session">
+      <div id="live-cards" class="live-cards"></div>
+      <p id="live-empty" class="live-empty">目前沒有進行中的 session</p>
+    </section>
+  </main>
+  <script src="/static/live.js?v=1"></script>
+</body>
+</html>
