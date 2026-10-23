@@ -232,12 +232,12 @@ impl LiveServer {
         fs::write(&rollout, text).unwrap();
         let conn = rusqlite::Connection::open(dir.join("state_5.sqlite")).unwrap();
         conn.execute(
-            "create table if not exists threads (id text primary key, rollout_path text, cwd text, name text, title text, updated_at_ms integer, thread_source text, archived integer default 0)",
+            "create table if not exists threads (id text primary key, rollout_path text, cwd text, name text, title text, updated_at_ms integer, thread_source text, archived integer default 0, originator text)",
             [],
         )
         .unwrap();
         conn.execute(
-            "insert into threads (id, rollout_path, cwd, name, title, updated_at_ms, thread_source) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "insert into threads (id, rollout_path, cwd, name, title, updated_at_ms, thread_source, originator) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'codex-tui')",
             rusqlite::params![id, rollout.to_str().unwrap(), cwd, name, "第一則訊息", updated_at_ms, thread_source],
         )
         .unwrap();
@@ -251,6 +251,32 @@ impl LiveServer {
             text,
         )
         .unwrap();
+    }
+
+    /// 改變某個 Codex 對話的來源程式（預設是終端機版的 codex-tui）。
+    fn codex_originator(&self, id: &str, originator: &str) {
+        let conn = rusqlite::Connection::open(self.root.join("codex/state_5.sqlite")).unwrap();
+        conn.execute(
+            "update threads set originator = ?1 where id = ?2",
+            rusqlite::params![originator, id],
+        )
+        .unwrap();
+    }
+
+    /// 寫入一份對話紀錄，並把它的修改時間設成 `age_secs` 秒以前。
+    fn aged_transcript(&self, project_dir: &str, session_id: &str, lines: &[Value], age_secs: u64) {
+        self.transcript(project_dir, session_id, lines);
+        let path = self
+            .root
+            .join("claude/projects")
+            .join(project_dir)
+            .join(format!("{session_id}.jsonl"));
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(age_secs))
+            .unwrap();
     }
 
     /// 讓假的 `ps` 與 `lsof` 回報這些終端機裡的程序：(pid, tty, 指令列, 工作資料夾)。
@@ -1456,4 +1482,247 @@ async fn a_codex_card_that_is_not_open_cannot_be_focused() {
 
     assert_eq!(status, 404);
     assert!(server.fake.calls("osascript").is_empty());
+}
+
+const HOUR: u64 = 3600;
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// 一段已經結束的 Claude Code 對話：有工作資料夾、來源，可選的自訂標題。
+fn finished_conversation(
+    session: &str,
+    cwd: &str,
+    prompt: &str,
+    title: Option<&str>,
+) -> Vec<Value> {
+    let mut lines = vec![
+        json!({"type":"user","timestamp":"2026-10-23T08:00:00.000Z","cwd":cwd,"entrypoint":"cli","sessionId":session,"message":{"role":"user","content":prompt}}),
+    ];
+    if let Some(title) = title {
+        lines.push(json!({"type":"custom-title","customTitle":title,"sessionId":session}));
+    }
+    lines.push(json!({"type":"assistant","timestamp":"2026-10-23T08:00:09.000Z","cwd":cwd,"entrypoint":"cli","sessionId":session,"message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}}));
+    lines
+}
+
+fn recent_ids(live: &Value) -> Vec<&str> {
+    live["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_claude_session_that_just_ended_is_listed_with_title_folder_and_last_instruction() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.aged_transcript(
+        "-work-erp",
+        "s-done",
+        &finished_conversation("s-done", "/work/erp", "修好登入頁", Some("登入頁修正")),
+        2 * HOUR,
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(recent_ids(&live), vec!["s-done"]);
+    let item = &live["recent"][0];
+    assert_eq!(item["agent"], "claude");
+    assert_eq!(item["name"], "登入頁修正");
+    assert_eq!(item["folder"], "erp");
+    assert_eq!(item["lastPrompt"], "修好登入頁");
+    assert!(item["updatedAt"].as_u64().unwrap() > (now_ms() as u64) - 3 * HOUR * 1000);
+}
+
+#[tokio::test]
+async fn recent_sessions_exclude_what_is_open_what_is_old_background_runs_and_subagents() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-open", "/work/erp", "idle", 1000));
+    server.aged_transcript(
+        "-work-erp",
+        "s-open",
+        &finished_conversation("s-open", "/work/erp", "還開著", None),
+        HOUR,
+    );
+    server.aged_transcript(
+        "-work-erp",
+        "s-old",
+        &finished_conversation("s-old", "/work/erp", "昨天以前", None),
+        30 * HOUR,
+    );
+    let mut background = finished_conversation("s-p", "/work/erp", "claude -p 的任務", None);
+    background[0]["entrypoint"] = json!("sdk-cli");
+    server.aged_transcript("-work-erp", "s-p", &background, HOUR);
+    server.aged_transcript(
+        "-work-erp",
+        "s-keep",
+        &finished_conversation("s-keep", "/work/erp", "該列出的", None),
+        HOUR,
+    );
+    // 子 agent 的紀錄放在 <session>/subagents/ 底下
+    let subagents = server
+        .root
+        .join("claude/projects/-work-erp/s-keep/subagents");
+    fs::create_dir_all(&subagents).unwrap();
+    fs::write(
+        subagents.join("agent-1.jsonl"),
+        format!(
+            "{}\n",
+            finished_conversation("agent-1", "/work/erp", "子 agent", None)[0]
+        ),
+    )
+    .unwrap();
+
+    let live = server.live().await;
+
+    assert_eq!(recent_ids(&live), vec!["s-keep"]);
+    assert_eq!(live["live"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn at_most_ten_recent_sessions_are_listed_newest_first() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    for n in 0..12u64 {
+        let id = format!("s-{n:02}");
+        server.aged_transcript(
+            "-work-erp",
+            &id,
+            &finished_conversation(&id, "/work/erp", "指令", None),
+            (n + 1) * 600,
+        );
+    }
+
+    let live = server.live().await;
+
+    let expected: Vec<String> = (0..10).map(|n| format!("s-{n:02}")).collect();
+    assert_eq!(recent_ids(&live), expected);
+}
+
+#[tokio::test]
+async fn recent_codex_conversations_from_the_terminal_are_listed() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    let now = now_ms();
+    server.codex_thread(
+        T1,
+        "/work/erp",
+        Some("剛結束的"),
+        now - 2 * 3600 * 1000,
+        "user",
+        "done",
+    );
+    server.codex_thread(
+        T2,
+        "/work/erp",
+        Some("來自 VS Code"),
+        now - 3600 * 1000,
+        "user",
+        "done",
+    );
+    server.codex_originator(T2, "codex_vscode");
+    server.codex_thread(
+        "01a1-sub",
+        "/work/erp",
+        Some("子 agent"),
+        now - 1000,
+        "subagent",
+        "done",
+    );
+    server.codex_thread(
+        "01a1-old",
+        "/work/erp",
+        Some("兩天前"),
+        now - 48 * 3600 * 1000,
+        "user",
+        "done",
+    );
+    server.codex_thread(
+        "01a1-open",
+        "/work/other",
+        Some("還開著"),
+        now - 1000,
+        "user",
+        "done",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/other")]);
+    server.codex_rollout(
+        T1,
+        &[codex_user_item("2026-10-23T08:00:00.000Z", "整理報表")],
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(recent_ids(&live), vec![T1]);
+    let item = &live["recent"][0];
+    assert_eq!(item["agent"], "codex");
+    assert_eq!(item["name"], "剛結束的");
+    assert_eq!(item["folder"], "erp");
+    assert_eq!(item["lastPrompt"], "整理報表");
+}
+
+#[tokio::test]
+async fn an_open_codex_conversation_is_not_also_listed_as_recent() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(
+        T1,
+        "/work/erp",
+        Some("還開著"),
+        now_ms() - 1000,
+        "user",
+        "running",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"].as_array().unwrap().len(), 1);
+    assert_eq!(live["recent"], json!([]));
+}
+
+#[tokio::test]
+async fn an_earlier_copy_of_a_conversation_that_is_open_under_a_new_id_is_not_listed_again() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut reopened = registered("s-new", "/work/erp", "idle", 1000);
+    reopened["name"] = json!("登入頁修正");
+    server.claude_session(pid, reopened);
+    // 重開同一段對話會換一個 session id，舊的紀錄仍在，標題與資料夾相同
+    server.aged_transcript(
+        "-work-erp",
+        "s-old",
+        &finished_conversation("s-old", "/work/erp", "舊的", Some("登入頁修正")),
+        HOUR,
+    );
+    server.aged_transcript(
+        "-work-erp",
+        "s-other",
+        &finished_conversation(
+            "s-other",
+            "/work/erp",
+            "同資料夾的另一段對話",
+            Some("別的標題"),
+        ),
+        2 * HOUR,
+    );
+    server.aged_transcript(
+        "-work-mango",
+        "s-same-title",
+        &finished_conversation(
+            "s-same-title",
+            "/work/mango",
+            "別的資料夾",
+            Some("登入頁修正"),
+        ),
+        3 * HOUR,
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(recent_ids(&live), vec!["s-other", "s-same-title"]);
 }

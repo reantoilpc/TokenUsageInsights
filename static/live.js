@@ -3,6 +3,8 @@ const POLL_MS = 3000;
 let timer = null;
 
 const cards = document.getElementById('live-cards');
+const recentList = document.getElementById('recent-list');
+const recentEmpty = document.getElementById('recent-empty');
 const empty = document.getElementById('live-empty');
 const status = document.getElementById('live-status');
 const notice = document.getElementById('live-notice');
@@ -77,6 +79,25 @@ function renderCard(session) {
   return card;
 }
 
+// 名稱規則：自訂標題；沒有就取最後指令的開頭；再沒有就用資料夾名稱
+function recentTitle(item) {
+  return item.name || (item.lastPrompt ? item.lastPrompt.slice(0, 30) : item.folder);
+}
+
+function renderRecent(item) {
+  const row = element('article', 'live-card live-recent');
+  row.append(
+    element('div', 'live-card-head', ''),
+    element('div', 'live-card-meta', `${item.folder} · ${AGENT_LABEL[item.agent] || item.agent}`),
+  );
+  row.firstChild.append(element('span', 'live-card-title', recentTitle(item)));
+  const foot = element('div', 'live-card-foot');
+  if (item.lastPrompt) foot.append(element('span', 'live-card-prompt', item.lastPrompt));
+  foot.append(element('span', 'live-card-time', ago(Date.now() - item.updatedAt)));
+  row.append(foot);
+  return row;
+}
+
 function renderProgress({ done, total, current }) {
   const bar = element('div', 'live-bar');
   const fill = element('span', 'live-bar-fill');
@@ -93,6 +114,8 @@ function render(data) {
   const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
   cards.replaceChildren(...data.live.map(renderCard));
   if (focusedKey) cards.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
+  recentEmpty.hidden = data.recent.length > 0;
+  recentList.replaceChildren(...data.recent.map(renderRecent));
   status.textContent = '';
 }
 

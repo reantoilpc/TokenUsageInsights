@@ -156,3 +156,18 @@
   outline: 2px solid var(--status-color);
   outline-offset: 2px;
 }
+
+.live-section-title {
+  margin: 32px 0 12px;
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+}
+
+.live-recent {
+  cursor: default;
+}
+
+.live-empty-small {
+  padding: 24px 0;
+  font-size: 0.9rem;
+}

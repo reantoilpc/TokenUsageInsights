@@ -15,7 +15,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +39,26 @@ struct LiveSession {
     /// 待辦清單進度；沒有清單時為 null。
     progress: Option<transcript::Progress>,
 }
+
+/// 最近結束的 session（已經沒有程序，資料取自對話紀錄）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Recent {
+    /// 工作資料夾的完整路徑，只在伺服器內部用來接續，不回給前端。
+    #[serde(skip)]
+    cwd: String,
+    agent: &'static str,
+    id: String,
+    name: Option<String>,
+    folder: String,
+    last_prompt: Option<String>,
+    prompt_at: Option<u64>,
+    /// 最後活動的時間（epoch 毫秒），也就是結束的時間。
+    updated_at: u64,
+}
+
+const RECENT_WINDOW_MS: u64 = 24 * 3600 * 1000;
+const RECENT_LIMIT: usize = 10;
 
 /// Claude Code 自己維護的 session 登記檔（`<CLAUDE_DIR>/sessions/<pid>.json`）。
 #[derive(Deserialize)]
@@ -62,10 +86,14 @@ impl Registered {
 }
 
 pub async fn get_live() -> Json<Value> {
-    let live = tokio::task::spawn_blocking(live_sessions)
-        .await
-        .unwrap_or_default();
-    Json(json!({ "live": live, "recent": [] }))
+    let (live, recent) = tokio::task::spawn_blocking(|| {
+        let live = live_sessions();
+        let recent = recent_sessions(&live);
+        (live, recent)
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({ "live": live, "recent": recent }))
 }
 
 /// Claude Code 與 Codex 的 session 合在一起排序。
@@ -242,4 +270,78 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
             "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
         ),
     }
+}
+
+/// 24 小時內結束、目前沒開著的 session，Claude Code 與 Codex 合在一起，最近的在前，最多 10 筆。
+fn recent_sessions(live: &[LiveSession]) -> Vec<Recent> {
+    let open: HashSet<String> = live.iter().map(|session| session.id.clone()).collect();
+    // 重開同一段對話會換 session id，舊的紀錄還在：標題與資料夾都相同就當作同一段，不重複列出
+    let continued: HashSet<(&str, &str)> = live
+        .iter()
+        .filter_map(|session| Some((session.cwd.as_str(), session.name.as_deref()?)))
+        .collect();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64);
+    let since = now.saturating_sub(RECENT_WINDOW_MS);
+    let mut recent = claude_recent(&crate::db::get_claude_dir(), &open, since);
+    recent.retain(|item| {
+        !item
+            .name
+            .as_deref()
+            .is_some_and(|name| continued.contains(&(item.cwd.as_str(), name)))
+    });
+    recent.extend(codex::recent(&crate::db::get_codex_dir(), &open, since));
+    recent.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+    recent.truncate(RECENT_LIMIT);
+    recent
+}
+
+/// 專案資料夾下的 `<session id>.jsonl`；子 agent 的紀錄放在 `<session id>/subagents/`，不在這一層。
+fn claude_recent(claude_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<Recent> {
+    let Ok(projects) = std::fs::read_dir(claude_dir.join("projects")) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(u64, PathBuf)> = projects
+        .flatten()
+        .filter_map(|project| std::fs::read_dir(project.path()).ok())
+        .flat_map(|files| files.flatten())
+        .filter(|file| file.path().extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|file| {
+            let modified = file.metadata().ok()?.modified().ok()?;
+            let ms = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+            Some((ms, file.path()))
+        })
+        .filter(|(ms, path)| {
+            let id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("");
+            *ms >= since_ms && !open.contains(id)
+        })
+        .collect();
+    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    files
+        .into_iter()
+        .filter_map(|(updated_at, path)| {
+            let id = path.file_stem()?.to_str()?.to_string();
+            let transcript = transcript::read(&path, transcript::claude_scan);
+            if transcript.background {
+                return None;
+            }
+            let cwd = transcript.cwd?;
+            let prompt = transcript.last_prompt;
+            Some(Recent {
+                folder: folder_of(&cwd),
+                cwd,
+                agent: "claude",
+                id,
+                name: transcript.title,
+                prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
+                last_prompt: prompt.map(|prompt| prompt.text),
+                updated_at,
+            })
+        })
+        .take(RECENT_LIMIT)
+        .collect()
 }

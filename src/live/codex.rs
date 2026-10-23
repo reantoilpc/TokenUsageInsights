@@ -9,7 +9,7 @@ use super::{
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -370,4 +370,48 @@ fn open_read_only(path: &Path) -> Option<Connection> {
             )
         })
         .ok()
+}
+
+/// 24 小時內結束、來自終端機版（codex-tui）的對話。來源欄位不可靠（終端機接續 VS Code
+/// 建立的對話時仍是 vscode），所以用 originator 判斷；舊版資料庫沒有這個欄位時就不列。
+pub fn recent(codex_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<super::Recent> {
+    let Some(conn) = state_db(codex_dir).and_then(|path| open_read_only(&path)) else {
+        return Vec::new();
+    };
+    let Ok(mut statement) = conn.prepare(
+        "SELECT id, rollout_path, cwd, name, updated_at_ms FROM threads \
+         WHERE archived = 0 AND (thread_source IS NULL OR thread_source = 'user') \
+         AND originator = 'codex-tui' AND updated_at_ms >= ?1 ORDER BY updated_at_ms DESC",
+    ) else {
+        return Vec::new();
+    };
+    let rows = statement.query_map([since_ms], |row| {
+        Ok(Thread {
+            id: row.get(0)?,
+            rollout_path: PathBuf::from(row.get::<_, Option<String>>(1)?.unwrap_or_default()),
+            cwd: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            name: row
+                .get::<_, Option<String>>(3)?
+                .filter(|name| !name.is_empty()),
+            updated_at: row.get::<_, Option<u64>>(4)?.unwrap_or(0),
+        })
+    });
+    rows.map(|rows| rows.flatten().collect::<Vec<Thread>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|thread| !open.contains(&thread.id))
+        .map(|thread| {
+            let prompt = transcript::read(&thread.rollout_path, scan).last_prompt;
+            super::Recent {
+                folder: super::folder_of(&thread.cwd),
+                cwd: thread.cwd,
+                agent: "codex",
+                id: thread.id,
+                name: thread.name,
+                prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
+                last_prompt: prompt.map(|prompt| prompt.text),
+                updated_at: thread.updated_at,
+            }
+        })
+        .collect()
 }

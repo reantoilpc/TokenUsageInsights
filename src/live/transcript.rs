@@ -42,6 +42,12 @@ pub struct Transcript {
     pub asking: bool,
     /// 最後一個回合是否還在進行；紀錄裡看不出來時為 None（只有 Codex 用得到）。
     pub running: Option<bool>,
+    /// 使用者替這段對話取的名稱（Claude Code 的 custom-title）。
+    pub title: Option<String>,
+    /// 對話的工作資料夾，取自紀錄本身（已結束的 session 沒有登記檔可查）。
+    pub cwd: Option<String>,
+    /// 以 `claude -p` 這類背景方式執行的對話。
+    pub background: bool,
 }
 
 /// 逐行掃描一份紀錄：Claude Code 與 Codex 的格式不同，各自提供。
@@ -96,6 +102,9 @@ fn parse(path: &Path, len: u64, scan: Scan, previous: Transcript) -> Transcript 
     // 尾端沒有的資訊：紀錄只會往後加，先沿用上次讀到的
     found.last_prompt = found.last_prompt.or(previous.last_prompt);
     found.running = found.running.or(previous.running);
+    found.title = found.title.or(previous.title);
+    found.cwd = found.cwd.or(previous.cwd);
+    found.background |= previous.background;
     let missing =
         found.last_prompt.is_none() || (found.running.is_none() && previous.running.is_none());
     if start > 0 && missing && file.seek(SeekFrom::Start(0)).is_ok() {
@@ -122,12 +131,23 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_prompt = line.contains("\"user\""); // 工具回傳也是 user 訊息
         let maybe_todos = line.contains("TodoWrite");
         let maybe_ask = ASKING_TOOLS.iter().any(|tool| line.contains(tool));
-        if !maybe_prompt && !maybe_todos && !maybe_ask {
+        let maybe_title = line.contains("customTitle");
+        if !maybe_prompt && !maybe_todos && !maybe_ask && !maybe_title {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue; // 被截斷或壞掉的行
         };
+        if let Some(title) = entry["customTitle"]
+            .as_str()
+            .filter(|title| !title.is_empty())
+        {
+            found.title = Some(title.to_string());
+        }
+        if let Some(cwd) = entry["cwd"].as_str() {
+            found.cwd = Some(cwd.to_string());
+        }
+        found.background |= entry["entrypoint"] == "sdk-cli";
         if let Some(text) = typed_text(&entry) {
             found.last_prompt = Some(Prompt {
                 text,
