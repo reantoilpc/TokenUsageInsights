@@ -206,9 +206,6 @@ fn from_dashboard(headers: &HeaderMap) -> bool {
 }
 
 fn find_session(request: &SessionRef) -> Option<LiveSession> {
-    if request.agent != "claude" {
-        return None;
-    }
     live_sessions()
         .into_iter()
         .find(|session| session.agent == request.agent && session.id == request.id)
@@ -220,9 +217,15 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
     }
     let outcome = tokio::task::spawn_blocking(move || {
         let session = find_session(&request)?;
+        let how = if session.agent == "codex" {
+            ghostty::Match::StartsWith
+        } else {
+            ghostty::Match::EndsWith
+        };
         Some(ghostty::focus(
             &session.cwd,
             session.name.as_deref().unwrap_or(""),
+            how,
         ))
     })
     .await

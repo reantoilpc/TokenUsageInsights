@@ -2,13 +2,14 @@
 //! 執行的 `codex` 互動程序反推，再對應到 Codex 本機狀態資料庫裡的對話。
 
 use super::{
+    ghostty,
     transcript::{self, timestamp_ms, Progress, Prompt, Transcript},
     LiveSession,
 };
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -46,19 +47,63 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
         return Vec::new();
     }
     let threads = threads(codex_dir); // 最近更新的在前
-    let mut seen = HashSet::new();
-    let mut sessions = Vec::new();
-    for process in &processes {
-        let thread = match &process.thread_id {
-            Some(id) => threads.iter().find(|thread| &thread.id == id),
-            // 沒有 id：取同資料夾最近更新的對話
-            None => threads.iter().find(|thread| thread.cwd == process.cwd),
-        };
-        if let Some(thread) = thread.filter(|thread| seen.insert(thread.id.clone())) {
-            sessions.push(into_live_session(thread));
+    let mut open: Vec<&Thread> = Vec::new();
+
+    // `codex resume <id>` 已經指明是哪個對話
+    for id in processes
+        .iter()
+        .filter_map(|process| process.thread_id.as_ref())
+    {
+        if let Some(thread) = threads.iter().find(|thread| &thread.id == id) {
+            if !open.iter().any(|known| known.id == thread.id) {
+                open.push(thread);
+            }
         }
     }
-    sessions
+
+    // 沒有 id 的程序：只知道資料夾，要從該資料夾的對話裡挑
+    let mut by_folder: Vec<(&str, usize)> = Vec::new();
+    for process in processes
+        .iter()
+        .filter(|process| process.thread_id.is_none())
+    {
+        match by_folder.iter_mut().find(|(cwd, _)| *cwd == process.cwd) {
+            Some((_, count)) => *count += 1,
+            None => by_folder.push((&process.cwd, 1)),
+        }
+    }
+    let mut tabs = None; // 要用到才向 Ghostty 問，而且一次請求最多問一次
+    for (cwd, count) in by_folder {
+        let candidates: Vec<&Thread> = threads
+            .iter()
+            .filter(|thread| thread.cwd == cwd && !open.iter().any(|known| known.id == thread.id))
+            .collect();
+        let chosen = if candidates.len() > 1 {
+            // 同資料夾有好幾個對話：看哪些有對應的分頁（標題是「名稱 | 資料夾」）
+            let tabs = tabs.get_or_insert_with(ghostty::tabs);
+            let titled: Vec<&Thread> = candidates
+                .iter()
+                .copied()
+                .filter(|thread| {
+                    thread.name.as_deref().is_some_and(|name| {
+                        tabs.iter()
+                            .flatten()
+                            .any(|tab| tab.cwd == cwd && tab.title.starts_with(name))
+                    })
+                })
+                .collect();
+            // ponytail: 讀不到分頁標題時，只顯示最近更新的那一個
+            if titled.is_empty() {
+                candidates[..1].to_vec()
+            } else {
+                titled
+            }
+        } else {
+            candidates
+        };
+        open.extend(chosen.into_iter().take(count));
+    }
+    open.into_iter().map(into_live_session).collect()
 }
 
 fn into_live_session(thread: &Thread) -> LiveSession {

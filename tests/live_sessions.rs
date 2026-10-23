@@ -58,10 +58,11 @@ impl FakeCommands {
             .map(|text| {
                 text.lines()
                     .map(|line| {
-                        line.split('\x1f')
-                            .filter(|arg| !arg.is_empty())
-                            .map(str::to_string)
-                            .collect()
+                        // 每個參數後面都接一個分隔字元，最後多出來的空字串要去掉；空參數則保留
+                        let mut args: Vec<String> =
+                            line.split('\x1f').map(str::to_string).collect();
+                        args.pop();
+                        args
                     })
                     .collect()
             })
@@ -807,7 +808,7 @@ async fn clicking_a_card_asks_ghostty_for_the_tab_in_that_folder_titled_with_the
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0][0], "-e");
     assert!(calls[0][1].contains("focus"));
-    assert_eq!(calls[0][2..], ["/work/mango-hsu", "芒果許"]);
+    assert_eq!(calls[0][2..], ["/work/mango-hsu", "芒果許", "ends"]);
 }
 
 #[tokio::test]
@@ -823,8 +824,7 @@ async fn a_session_without_a_name_is_matched_by_folder_only() {
 
     assert_eq!(status, 200);
     let calls = server.fake.calls("osascript");
-    assert_eq!(calls[0][2], "/work/erp");
-    assert_eq!(calls[0].get(3).map(String::as_str).unwrap_or(""), "");
+    assert_eq!(calls[0][2..], ["/work/erp", "", "ends"]);
 }
 
 #[tokio::test]
@@ -1318,4 +1318,142 @@ async fn other_codex_tool_calls_never_make_the_card_waiting() {
     .await;
 
     assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
+
+/// 假的 Ghostty 分頁清單：每行「工作資料夾 \t 標題」。
+fn tabs(rows: &[(&str, &str)]) -> String {
+    rows.iter()
+        .map(|(cwd, title)| format!("{cwd}\t{title}\n"))
+        .collect()
+}
+
+fn names(live: &Value) -> Vec<&str> {
+    live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect()
+}
+
+#[tokio::test]
+async fn two_codex_processes_in_one_folder_are_told_apart_by_their_tab_titles() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("工作 A"), 3000, "user", "done");
+    server.codex_thread(T2, "/work/erp", Some("工作 B"), 2000, "user", "done");
+    server.codex_thread(
+        "01a1-old",
+        "/work/erp",
+        Some("舊的 C"),
+        1000,
+        "user",
+        "done",
+    );
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/erp"),
+        (102, "ttys004", "codex", "/work/erp"),
+    ]);
+    server.fake.script(
+        "osascript",
+        &tabs(&[
+            ("/work/erp", "工作 B | erp"),
+            ("/work/erp", "✳ 一個 Claude Code session"),
+            ("/work/erp", "工作 A | erp"),
+            ("/work/other", "舊的 C | other"),
+        ]),
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["工作 A", "工作 B"]);
+}
+
+#[tokio::test]
+async fn a_single_process_follows_its_tab_even_when_a_newer_conversation_exists() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("新的對話"), 3000, "user", "done");
+    server.codex_thread(
+        T2,
+        "/work/erp",
+        Some("從清單接續的舊對話"),
+        1000,
+        "user",
+        "done",
+    );
+    server.processes(&[(101, "ttys003", "codex resume", "/work/erp")]);
+    server.fake.script(
+        "osascript",
+        &tabs(&[("/work/erp", "從清單接續的舊對話 | erp")]),
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["從清單接續的舊對話"]);
+}
+
+#[tokio::test]
+async fn when_tab_titles_cannot_be_read_the_latest_conversation_is_shown_alone() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("新的"), 3000, "user", "done");
+    server.codex_thread(T2, "/work/erp", Some("舊的"), 1000, "user", "done");
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/erp"),
+        (102, "ttys004", "codex", "/work/erp"),
+    ]);
+    server.fake.failing("osascript");
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["新的"]);
+}
+
+#[tokio::test]
+async fn ghostty_is_only_asked_when_the_folder_has_more_than_one_conversation() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("唯一的對話"), 3000, "user", "done");
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+    server.fake.script("osascript", "");
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["唯一的對話"]);
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn clicking_a_codex_card_looks_for_a_tab_in_that_folder_that_starts_with_the_name() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(
+        T1,
+        "/work/mango-hsu",
+        Some("比較模式"),
+        1000,
+        "user",
+        "done",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/mango-hsu")]);
+    server.fake.script("osascript", "ok\n");
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!((status, &body["focused"]), (200, &json!(true)));
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0][2..], ["/work/mango-hsu", "比較模式", "starts"]);
+}
+
+#[tokio::test]
+async fn a_codex_card_that_is_not_open_cannot_be_focused() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("已經關掉的"), 1000, "user", "done");
+    server.fake.script("osascript", "ok\n");
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert!(server.fake.calls("osascript").is_empty());
 }
