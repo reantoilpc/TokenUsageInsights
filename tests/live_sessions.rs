@@ -126,6 +126,9 @@ impl LiveServer {
         let home = root.join("home");
         fs::create_dir_all(&home).unwrap();
         let fake = FakeCommands::new(&root);
+        // 預設沒有任何終端機程序，測試才不會讀到這台電腦真正在跑的 Codex
+        fake.script("ps", "");
+        fake.script("lsof", "");
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -201,6 +204,56 @@ impl LiveServer {
         let dir = self.root.join("claude/sessions");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(format!("{pid}.json")), fields.to_string()).unwrap();
+    }
+
+    /// 在假的 Codex 狀態資料庫加入一個對話，並寫入它的紀錄檔。
+    /// `turn`：`running` ＝最後一個回合還沒結束；`done` ＝已完成；`aborted` ＝被中止。
+    fn codex_thread(
+        &self,
+        id: &str,
+        cwd: &str,
+        name: Option<&str>,
+        updated_at_ms: i64,
+        thread_source: &str,
+        turn: &str,
+    ) {
+        let dir = self.root.join("codex");
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        let rollout = dir.join(format!("sessions/rollout-{id}.jsonl"));
+        let event = |kind: &str| json!({"timestamp":"2026-10-23T08:00:00.000Z","type":"event_msg","payload":{"type":kind,"turn_id":"t1"}});
+        let events = match turn {
+            "running" => vec![event("task_started")],
+            "done" => vec![event("task_started"), event("task_complete")],
+            "aborted" => vec![event("task_started"), event("turn_aborted")],
+            _ => vec![],
+        };
+        let text: String = events.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(&rollout, text).unwrap();
+        let conn = rusqlite::Connection::open(dir.join("state_5.sqlite")).unwrap();
+        conn.execute(
+            "create table if not exists threads (id text primary key, rollout_path text, cwd text, name text, title text, updated_at_ms integer, thread_source text, archived integer default 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "insert into threads (id, rollout_path, cwd, name, title, updated_at_ms, thread_source) values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, rollout.to_str().unwrap(), cwd, name, "第一則訊息", updated_at_ms, thread_source],
+        )
+        .unwrap();
+    }
+
+    /// 讓假的 `ps` 與 `lsof` 回報這些終端機裡的程序：(pid, tty, 指令列, 工作資料夾)。
+    fn processes(&self, rows: &[(u32, &str, &str, &str)]) {
+        let ps: String = rows
+            .iter()
+            .map(|(pid, tty, command, _)| format!("{pid} {tty} {command}\n"))
+            .collect();
+        let lsof: String = rows
+            .iter()
+            .map(|(pid, _, _, cwd)| format!("p{pid}\nn{cwd}\n"))
+            .collect();
+        self.fake.script("ps", &ps);
+        self.fake.script("lsof", &lsof);
     }
 
     /// 寫入某個 session 的對話紀錄；`project_dir` 是 Claude Code 把工作資料夾路徑編碼後的資料夾名
@@ -854,4 +907,156 @@ async fn focus_only_accepts_an_agent_and_a_known_session_id() {
         );
     }
     assert!(server.fake.calls("osascript").is_empty());
+}
+
+const T1: &str = "01a12339-3ac8-7211-9bea-d289dde24cd3";
+const T2: &str = "01a12f46-3b09-7c03-860f-137f0a2de48f";
+
+#[tokio::test]
+async fn terminal_codex_sessions_show_name_folder_and_status() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(
+        T1,
+        "/work/mango-hsu",
+        Some("比較模式"),
+        2000,
+        "user",
+        "running",
+    );
+    server.codex_thread(T2, "/work/erp", None, 1000, "user", "done");
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/mango-hsu"),
+        (102, "ttys004", &format!("codex resume {T2}"), "/work/erp"),
+    ]);
+
+    let live = server.live().await;
+    let items = live["live"].as_array().unwrap();
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["agent"], "codex");
+    assert_eq!(items[0]["id"], T1);
+    assert_eq!(items[0]["name"], "比較模式");
+    assert_eq!(items[0]["folder"], "mango-hsu");
+    assert_eq!(items[0]["status"], "working");
+    assert_eq!(items[1]["id"], T2);
+    assert_eq!(items[1]["name"], Value::Null);
+    assert_eq!(items[1]["folder"], "erp");
+    assert_eq!(items[1]["status"], "idle");
+}
+
+#[tokio::test]
+async fn an_aborted_turn_is_idle_not_working() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "aborted");
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+
+    assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
+
+#[tokio::test]
+async fn codex_processes_that_are_not_terminal_sessions_are_ignored() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "done");
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/erp"),
+        // 常駐程式、VS Code 擴充套件、桌面版：沒有終端機
+        (
+            102,
+            "??",
+            "/Users/me/.codex/packages/bin/codex app-server --listen unix:// --managed-daemon",
+            "/work/erp",
+        ),
+        (
+            103,
+            "??",
+            "/Users/me/.vscode/extensions/openai.chatgpt/bin/codex -c x=1 app-server",
+            "/work/erp",
+        ),
+        // 有終端機但不是互動介面
+        (
+            104,
+            "ttys005",
+            "codex app-server --listen stdio",
+            "/work/erp",
+        ),
+        (105, "ttys006", "codex exec fix-the-bug", "/work/erp"),
+        (106, "ttys007", "vim codex-notes.md", "/work/erp"),
+    ]);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn without_an_id_the_latest_real_conversation_in_the_folder_is_used() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("舊的"), 1000, "user", "done");
+    server.codex_thread(T2, "/work/erp", Some("新的"), 2000, "user", "done");
+    server.codex_thread(
+        "01a1-sub",
+        "/work/erp",
+        Some("子 agent"),
+        9000,
+        "subagent",
+        "running",
+    );
+    server.codex_thread(
+        "01a1-other",
+        "/work/other",
+        Some("別的資料夾"),
+        9500,
+        "user",
+        "done",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"].as_array().unwrap().len(), 1);
+    assert_eq!(live["live"][0]["name"], "新的");
+}
+
+#[tokio::test]
+async fn an_id_that_matches_no_conversation_shows_no_card() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "done");
+    server.processes(&[(101, "ttys003", &format!("codex resume {T2}"), "/work/erp")]);
+
+    assert_eq!(server.live().await["live"], json!([]));
+}
+
+#[tokio::test]
+async fn two_processes_in_one_folder_without_ids_show_a_single_card_for_now() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("唯一一張"), 1000, "user", "done");
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/erp"),
+        (102, "ttys004", "codex", "/work/erp"),
+    ]);
+
+    assert_eq!(server.live().await["live"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn codex_and_claude_cards_are_ordered_together() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-idle", "/work/claude", "idle", 5000));
+    server.codex_thread(
+        T1,
+        "/work/codex",
+        Some("工作中的 Codex"),
+        1000,
+        "user",
+        "running",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/codex")]);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["agent"], "codex");
+    assert_eq!(live["live"][0]["status"], "working");
+    assert_eq!(live["live"][1]["agent"], "claude");
+    assert_eq!(live["live"][1]["status"], "idle");
 }

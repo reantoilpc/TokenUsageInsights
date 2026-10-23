@@ -67,23 +67,26 @@ pub fn read(path: &Path) -> Transcript {
     parsed
 }
 
+/// 檔案最後約 400 KB 的文字；起點可能落在某一行中間，那一行不是完整的 JSON。
+pub(super) fn read_tail(file: &mut File, len: u64) -> Option<String> {
+    let mut bytes = Vec::new();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .ok()?;
+    file.by_ref()
+        .take(TAIL_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn parse(path: &Path, len: u64) -> Transcript {
     let Ok(mut file) = File::open(path) else {
         return Transcript::default();
     };
-    let start = len.saturating_sub(TAIL_BYTES);
-    let mut bytes = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_err()
-        || file
-            .by_ref()
-            .take(TAIL_BYTES)
-            .read_to_end(&mut bytes)
-            .is_err()
-    {
+    let Some(text) = read_tail(&mut file, len) else {
         return Transcript::default();
-    }
-    // 尾端的起點可能落在某一行中間；那一行不是完整的 JSON，解析失敗時會被略過
-    let text = String::from_utf8_lossy(&bytes);
+    };
+    let start = len.saturating_sub(TAIL_BYTES);
     let mut found = scan(text.lines());
     if found.last_prompt.is_none() && start > 0 && file.seek(SeekFrom::Start(0)).is_ok() {
         // 最後一個指令早在尾端範圍之前：回頭掃整份檔案找指令。

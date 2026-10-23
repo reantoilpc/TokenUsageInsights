@@ -1,6 +1,7 @@
 //! 「進行中」即時 session API：回傳目前還開著的 session 與最近結束的 session。
 //! 即時狀態不進資料庫，每次請求即時讀取。
 
+mod codex;
 mod ghostty;
 mod transcript;
 
@@ -61,26 +62,16 @@ impl Registered {
 }
 
 pub async fn get_live() -> Json<Value> {
-    let live = tokio::task::spawn_blocking(|| claude_sessions(&crate::db::get_claude_dir()))
+    let live = tokio::task::spawn_blocking(live_sessions)
         .await
         .unwrap_or_default();
     Json(json!({ "live": live, "recent": [] }))
 }
 
-fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
-    let Ok(entries) = std::fs::read_dir(claude_dir.join("sessions")) else {
-        return Vec::new();
-    };
-    let mut sessions: Vec<LiveSession> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        // 只讀 .json：同資料夾內的 .key 是機密，絕不開啟
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter_map(|text| serde_json::from_str::<Registered>(&text).ok())
-        .filter(Registered::is_open)
-        .map(|registered| into_live_session(registered, claude_dir))
-        .collect();
+/// Claude Code 與 Codex 的 session 合在一起排序。
+fn live_sessions() -> Vec<LiveSession> {
+    let mut sessions = claude_sessions(&crate::db::get_claude_dir());
+    sessions.extend(codex::sessions(&crate::db::get_codex_dir()));
     sessions.sort_by(|a, b| {
         status_rank(a.status)
             .cmp(&status_rank(b.status))
@@ -89,11 +80,24 @@ fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
     sessions
 }
 
+fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
+    let Ok(entries) = std::fs::read_dir(claude_dir.join("sessions")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        // 只讀 .json：同資料夾內的 .key 是機密，絕不開啟
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|text| serde_json::from_str::<Registered>(&text).ok())
+        .filter(Registered::is_open)
+        .map(|registered| into_live_session(registered, claude_dir))
+        .collect()
+}
+
 fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
-    let folder = Path::new(&registered.cwd).file_name().map_or_else(
-        || registered.cwd.clone(),
-        |name| name.to_string_lossy().into_owned(),
-    );
+    let folder = folder_of(&registered.cwd);
     let transcript = transcript_path(claude_dir, &registered.cwd, &registered.session_id)
         .map(|path| transcript::read(&path))
         .unwrap_or_default();
@@ -139,6 +143,13 @@ fn transcript_path(claude_dir: &Path, cwd: &str, session_id: &str) -> Option<Pat
             .join("projects")
             .join(project)
             .join(format!("{session_id}.jsonl")),
+    )
+}
+
+fn folder_of(cwd: &str) -> String {
+    Path::new(cwd).file_name().map_or_else(
+        || cwd.to_string(),
+        |name| name.to_string_lossy().into_owned(),
     )
 }
 
@@ -198,9 +209,9 @@ fn find_session(request: &SessionRef) -> Option<LiveSession> {
     if request.agent != "claude" {
         return None;
     }
-    claude_sessions(&crate::db::get_claude_dir())
+    live_sessions()
         .into_iter()
-        .find(|session| session.id == request.id)
+        .find(|session| session.agent == request.agent && session.id == request.id)
 }
 
 pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> Response {
