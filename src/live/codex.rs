@@ -2,7 +2,7 @@
 //! 執行的 `codex` 互動程序反推，再對應到 Codex 本機狀態資料庫裡的對話。
 
 use super::{
-    transcript::{self, timestamp_ms, Prompt, Transcript},
+    transcript::{self, timestamp_ms, Progress, Prompt, Transcript},
     LiveSession,
 };
 use rusqlite::{Connection, OpenFlags};
@@ -70,15 +70,15 @@ fn into_live_session(thread: &Thread) -> LiveSession {
         id: thread.id.clone(),
         name: thread.name.clone(),
         folder: super::folder_of(&thread.cwd),
-        status: if transcript.running == Some(true) {
-            "working"
-        } else {
-            "idle"
+        status: match (transcript.running == Some(true), transcript.asking) {
+            (true, _) => "working", // 問了問題之後 Codex 還會繼續做事，這時仍是工作中
+            (false, true) => "waiting",
+            (false, false) => "idle",
         },
         updated_at: thread.updated_at,
         prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
         last_prompt: prompt.map(|prompt| prompt.text),
-        progress: None,
+        progress: transcript.progress,
     }
 }
 
@@ -90,7 +90,10 @@ fn scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_prompt = ["UserMessage", "user_message", "\"user\""]
             .iter()
             .any(|mark| line.contains(mark));
-        if !maybe_turn && !maybe_prompt {
+        let maybe_call = ["update_plan", "request_user_input_async"]
+            .iter()
+            .any(|name| line.contains(name));
+        if !maybe_turn && !maybe_prompt && !maybe_call {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(&line) else {
@@ -101,17 +104,44 @@ fn scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
             (Some("event_msg"), Some("task_complete" | "turn_aborted")) => {
                 found.running = Some(false);
             }
+            (Some("response_item"), Some("function_call")) => {
+                match entry["payload"]["name"].as_str() {
+                    Some("update_plan") => found.progress = plan_progress(&entry["payload"]),
+                    // 問了問題：直到我下一則訊息之前都算還沒回答
+                    Some("request_user_input_async") => found.asking = true,
+                    _ => {}
+                }
+            }
             _ => {
                 if let Some(text) = typed_text(&entry) {
                     found.last_prompt = Some(Prompt {
                         text,
                         at: timestamp_ms(&entry),
                     });
+                    found.asking = false;
                 }
             }
         }
     }
     found
+}
+
+/// 計畫工具的參數是一段 JSON 字串：`{"plan":[{"step":"…","status":"pending|in_progress|completed"}]}`。
+fn plan_progress(call: &Value) -> Option<Progress> {
+    let arguments: Value = serde_json::from_str(call["arguments"].as_str()?).ok()?;
+    let steps = arguments["plan"].as_array()?;
+    Some(Progress {
+        done: steps
+            .iter()
+            .filter(|step| step["status"] == "completed")
+            .count(),
+        total: steps.len(),
+        current: steps
+            .iter()
+            .find(|step| step["status"] == "in_progress")
+            .and_then(|step| step["step"].as_str())
+            .map(str::to_string),
+    })
 }
 
 /// 人打的字。目前版本記在 item_completed 的 UserMessage，較舊版本記在 user_message

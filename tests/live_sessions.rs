@@ -1205,3 +1205,117 @@ async fn a_long_turn_whose_start_is_older_than_the_tail_window_is_still_working(
 
     assert_eq!(server.live().await["live"][0]["status"], "working");
 }
+
+fn codex_call(timestamp: &str, name: &str, arguments: Value) -> Value {
+    json!({"timestamp":timestamp,"type":"response_item","payload":{"type":"function_call","name":name,"arguments":arguments.to_string(),"call_id":"c1"}})
+}
+
+fn codex_plan(steps: &[(&str, &str)]) -> Value {
+    let plan: Vec<Value> = steps
+        .iter()
+        .map(|(step, status)| json!({"step":step,"status":status}))
+        .collect();
+    codex_call(
+        "2026-10-23T08:00:10.000Z",
+        "update_plan",
+        json!({"plan":plan}),
+    )
+}
+
+fn codex_question() -> Value {
+    codex_call(
+        "2026-10-23T08:01:00.000Z",
+        "request_user_input_async",
+        json!({"questions":[{"title":"要用哪種格式？","options":["A","B"]}]}),
+    )
+}
+
+fn codex_turn(timestamp: &str, kind: &str) -> Value {
+    codex_event(timestamp, json!({"type":kind,"turn_id":"t1"}))
+}
+
+#[tokio::test]
+async fn codex_plan_steps_become_a_progress_bar() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "做登入功能"),
+        codex_plan(&[
+            ("設計", "pending"),
+            ("實作", "in_progress"),
+            ("驗證", "pending"),
+        ]),
+        codex_plan(&[
+            ("設計", "completed"),
+            ("實作", "in_progress"),
+            ("驗證", "pending"),
+        ]),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(
+        live["live"][0]["progress"],
+        json!({"done":1,"total":3,"current":"實作"})
+    );
+}
+
+#[tokio::test]
+async fn a_codex_session_without_a_plan_has_no_progress() {
+    let server =
+        server_with_codex_rollout(&[codex_user_item("2026-10-23T08:00:00.000Z", "隨便問問")]).await;
+    assert_eq!(server.live().await["live"][0]["progress"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_question_codex_asked_and_left_unanswered_makes_the_card_waiting() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "做登入功能"),
+        codex_turn("2026-10-23T08:00:01.000Z", "task_started"),
+        codex_question(),
+        codex_turn("2026-10-23T08:01:05.000Z", "task_complete"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "waiting");
+}
+
+#[tokio::test]
+async fn while_codex_keeps_working_after_asking_the_card_stays_working() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "做登入功能"),
+        codex_turn("2026-10-23T08:00:01.000Z", "task_started"),
+        codex_question(),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "working");
+}
+
+#[tokio::test]
+async fn once_the_person_answers_the_codex_card_is_no_longer_waiting() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "做登入功能"),
+        codex_turn("2026-10-23T08:00:01.000Z", "task_started"),
+        codex_question(),
+        codex_turn("2026-10-23T08:01:05.000Z", "task_complete"),
+        codex_user_item("2026-10-23T08:05:00.000Z", "選 A"),
+        codex_turn("2026-10-23T08:05:01.000Z", "task_started"),
+        codex_turn("2026-10-23T08:06:00.000Z", "task_complete"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
+
+#[tokio::test]
+async fn other_codex_tool_calls_never_make_the_card_waiting() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "跑測試"),
+        codex_turn("2026-10-23T08:00:01.000Z", "task_started"),
+        codex_call("2026-10-23T08:00:20.000Z", "wait", json!({})),
+        codex_turn("2026-10-23T08:01:05.000Z", "task_complete"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
