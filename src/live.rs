@@ -99,7 +99,7 @@ fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
 fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
     let folder = folder_of(&registered.cwd);
     let transcript = transcript_path(claude_dir, &registered.cwd, &registered.session_id)
-        .map(|path| transcript::read(&path))
+        .map(|path| transcript::read(&path, transcript::claude_scan))
         .unwrap_or_default();
     let prompt = transcript.last_prompt;
     LiveSession {

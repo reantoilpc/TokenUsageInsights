@@ -1,5 +1,5 @@
-//! Claude Code 對話紀錄（jsonl）的讀取：只讀尾端；尾端找不到時回頭掃整份檔案。
-//! 結果以「檔案大小＋修改時間」為鍵快取，檔案沒變就不重讀。
+//! 對話紀錄（jsonl，Claude Code 與 Codex 共用）的讀取：只讀尾端；尾端找不到時沿用上次
+//! 讀到的，再不行才回頭掃整份檔案。結果以「檔案大小＋修改時間」為鍵快取，檔案沒變就不重讀。
 
 use serde::Serialize;
 use serde_json::Value;
@@ -14,9 +14,9 @@ use std::{
 
 /// 對話紀錄可能超過數 MB，平常只讀最後這麼多位元組。
 const TAIL_BYTES: u64 = 400_000;
-/// 這幾種「看起來像標籤」的使用者訊息，其實是人自己打的 shell 指令或斜線指令。
 /// 這些工具會停下來等人回答（選擇題、計畫核准）；一般的權限確認框紀錄裡看不出來。
 const ASKING_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+/// 這幾種「看起來像標籤」的使用者訊息，其實是人自己打的 shell 指令或斜線指令。
 const TYPED_TAGS: [&str; 3] = ["<bash-input", "<command-name", "<command-message"];
 
 #[derive(Clone, Default)]
@@ -40,12 +40,17 @@ pub struct Transcript {
     pub progress: Option<Progress>,
     /// 有選擇題或計畫正在等人回答。
     pub asking: bool,
+    /// 最後一個回合是否還在進行；紀錄裡看不出來時為 None（只有 Codex 用得到）。
+    pub running: Option<bool>,
 }
+
+/// 逐行掃描一份紀錄：Claude Code 與 Codex 的格式不同，各自提供。
+pub type Scan = fn(&mut dyn Iterator<Item = String>) -> Transcript;
 
 type Cache = Mutex<HashMap<PathBuf, (u64, SystemTime, Transcript)>>;
 static CACHE: OnceLock<Cache> = OnceLock::new();
 
-pub fn read(path: &Path) -> Transcript {
+pub fn read(path: &Path, scan: Scan) -> Transcript {
     let Ok(meta) = std::fs::metadata(path) else {
         return Transcript::default();
     };
@@ -54,12 +59,12 @@ pub fn read(path: &Path) -> Transcript {
         meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
     );
     let cache = CACHE.get_or_init(Default::default);
-    if let Some((size, mtime, parsed)) = cache.lock().unwrap().get(path) {
-        if (*size, *mtime) == stamp {
-            return parsed.clone();
-        }
-    }
-    let parsed = parse(path, stamp.0);
+    let previous = match cache.lock().unwrap().get(path) {
+        Some((size, mtime, parsed)) if (*size, *mtime) == stamp => return parsed.clone(),
+        Some((_, _, parsed)) => Some(parsed.clone()),
+        None => None,
+    };
+    let parsed = parse(path, stamp.0, scan, previous.unwrap_or_default());
     cache
         .lock()
         .unwrap()
@@ -79,7 +84,7 @@ pub(super) fn read_tail(file: &mut File, len: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn parse(path: &Path, len: u64) -> Transcript {
+fn parse(path: &Path, len: u64, scan: Scan, previous: Transcript) -> Transcript {
     let Ok(mut file) = File::open(path) else {
         return Transcript::default();
     };
@@ -87,25 +92,33 @@ fn parse(path: &Path, len: u64) -> Transcript {
         return Transcript::default();
     };
     let start = len.saturating_sub(TAIL_BYTES);
-    let mut found = scan(text.lines());
-    if found.last_prompt.is_none() && start > 0 && file.seek(SeekFrom::Start(0)).is_ok() {
-        // 最後一個指令早在尾端範圍之前：回頭掃整份檔案找指令。
+    let mut found = scan(&mut text.lines().map(str::to_string));
+    // 尾端沒有的資訊：紀錄只會往後加，先沿用上次讀到的
+    found.last_prompt = found.last_prompt.or(previous.last_prompt);
+    found.running = found.running.or(previous.running);
+    let missing =
+        found.last_prompt.is_none() || (found.running.is_none() && previous.running.is_none());
+    if start > 0 && missing && file.seek(SeekFrom::Start(0)).is_ok() {
+        // 還是找不到（第一次讀一份很長的紀錄）：回頭掃整份檔案，只取指令與回合狀態。
         // ponytail: 待辦進度只看尾端；每次檔案變動都掃整檔太貴，更早的清單也已過時
-        let lines = BufReader::new(file)
+        let mut lines = BufReader::new(file)
             .split(b'\n')
             .map_while(Result::ok)
             .map(|line| String::from_utf8_lossy(&line).into_owned());
-        found.last_prompt = scan(lines).last_prompt;
+        let full = scan(&mut lines);
+        found.last_prompt = found.last_prompt.or(full.last_prompt);
+        found.running = found.running.or(full.running);
     }
     found.progress = found.progress.filter(|progress| progress.total > 0);
     found
 }
 
-fn scan<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Transcript {
+/// Claude Code 的對話紀錄。
+pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
     let mut found = Transcript::default();
     let mut unanswered: HashSet<String> = HashSet::new();
     for line in lines {
-        let line = line.as_ref();
+        let line = line.as_str();
         let maybe_prompt = line.contains("\"user\""); // 工具回傳也是 user 訊息
         let maybe_todos = line.contains("TodoWrite");
         let maybe_ask = ASKING_TOOLS.iter().any(|tool| line.contains(tool));
@@ -225,7 +238,7 @@ fn tag_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
     Some(&rest[..rest.find(&format!("</{tag}>"))?])
 }
 
-fn timestamp_ms(entry: &Value) -> Option<u64> {
+pub(super) fn timestamp_ms(entry: &Value) -> Option<u64> {
     let parsed = chrono::DateTime::parse_from_rfc3339(entry["timestamp"].as_str()?).ok()?;
     u64::try_from(parsed.timestamp_millis()).ok()
 }

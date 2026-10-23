@@ -1,11 +1,14 @@
 //! 終端機裡的 Codex CLI session。Codex 沒有 session 登記資料夾，所以從系統裡正在
 //! 執行的 `codex` 互動程序反推，再對應到 Codex 本機狀態資料庫裡的對話。
 
-use super::{transcript, LiveSession};
+use super::{
+    transcript::{self, timestamp_ms, Prompt, Transcript},
+    LiveSession,
+};
 use rusqlite::{Connection, OpenFlags};
+use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -20,6 +23,8 @@ const NON_INTERACTIVE: [&str; 7] = [
     "login",
     "logout",
 ];
+
+const TURN_EVENTS: [&str; 3] = ["task_started", "task_complete", "turn_aborted"];
 
 struct Process {
     cwd: String,
@@ -57,43 +62,89 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
 }
 
 fn into_live_session(thread: &Thread) -> LiveSession {
+    let transcript = transcript::read(&thread.rollout_path, scan);
+    let prompt = transcript.last_prompt;
     LiveSession {
         cwd: thread.cwd.clone(),
         agent: "codex",
         id: thread.id.clone(),
         name: thread.name.clone(),
         folder: super::folder_of(&thread.cwd),
-        status: if turn_running(&thread.rollout_path) {
+        status: if transcript.running == Some(true) {
             "working"
         } else {
             "idle"
         },
         updated_at: thread.updated_at,
-        last_prompt: None,
-        prompt_at: None,
+        prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
+        last_prompt: prompt.map(|prompt| prompt.text),
         progress: None,
     }
 }
 
-/// 紀錄尾端最後一個回合事件是「開始」就是工作中；「完成」或「中止」就是閒置。
-fn turn_running(rollout: &Path) -> bool {
-    let Ok(mut file) = File::open(rollout) else {
-        return false;
+/// Codex 的對話紀錄（rollout）。
+fn scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
+    let mut found = Transcript::default();
+    for line in lines {
+        let maybe_turn = TURN_EVENTS.iter().any(|event| line.contains(event));
+        let maybe_prompt = ["UserMessage", "user_message", "\"user\""]
+            .iter()
+            .any(|mark| line.contains(mark));
+        if !maybe_turn && !maybe_prompt {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(&line) else {
+            continue; // 被截斷或壞掉的行
+        };
+        match (entry["type"].as_str(), entry["payload"]["type"].as_str()) {
+            (Some("event_msg"), Some("task_started")) => found.running = Some(true),
+            (Some("event_msg"), Some("task_complete" | "turn_aborted")) => {
+                found.running = Some(false);
+            }
+            _ => {
+                if let Some(text) = typed_text(&entry) {
+                    found.last_prompt = Some(Prompt {
+                        text,
+                        at: timestamp_ms(&entry),
+                    });
+                }
+            }
+        }
+    }
+    found
+}
+
+/// 人打的字。目前版本記在 item_completed 的 UserMessage，較舊版本記在 user_message
+/// 事件；response_item 裡的 user 訊息也有，但其中混有 Codex 自動注入的內容
+/// （AGENTS.md 指示、環境資訊），那些不算。
+fn typed_text(entry: &Value) -> Option<String> {
+    let payload = &entry["payload"];
+    let text = match (entry["type"].as_str(), payload["type"].as_str()) {
+        (Some("event_msg"), Some("user_message")) => payload["message"].as_str()?.to_string(),
+        (Some("event_msg"), Some("item_completed")) if payload["item"]["type"] == "UserMessage" => {
+            join_text(&payload["item"]["content"])
+        }
+        (Some("response_item"), Some("message")) if payload["role"] == "user" => {
+            let text = join_text(&payload["content"]);
+            if text.starts_with('<') || text.starts_with("# AGENTS.md") {
+                return None;
+            }
+            text
+        }
+        _ => return None,
     };
-    let Some(len) = file.metadata().ok().map(|meta| meta.len()) else {
-        return false;
-    };
-    let Some(tail) = transcript::read_tail(&mut file, len) else {
-        return false;
-    };
-    tail.lines()
-        .filter_map(|line| {
-            ["task_started", "task_complete", "turn_aborted"]
-                .into_iter()
-                .find(|event| line.contains(&format!("\"{event}\"")))
-        })
-        .next_back()
-        == Some("task_started")
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+fn join_text(parts: &Value) -> String {
+    let texts: Vec<&str> = parts
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part["text"].as_str())
+        .collect();
+    texts.join("\n")
 }
 
 /// 有終端機、而且是 Codex 互動介面的程序。

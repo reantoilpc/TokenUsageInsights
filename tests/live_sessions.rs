@@ -242,6 +242,16 @@ impl LiveServer {
         .unwrap();
     }
 
+    /// 用指定的內容取代某個 Codex 對話的紀錄檔。
+    fn codex_rollout(&self, id: &str, lines: &[Value]) {
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(
+            self.root.join(format!("codex/sessions/rollout-{id}.jsonl")),
+            text,
+        )
+        .unwrap();
+    }
+
     /// 讓假的 `ps` 與 `lsof` 回報這些終端機裡的程序：(pid, tty, 指令列, 工作資料夾)。
     fn processes(&self, rows: &[(u32, &str, &str, &str)]) {
         let ps: String = rows
@@ -1059,4 +1069,139 @@ async fn codex_and_claude_cards_are_ordered_together() {
     assert_eq!(live["live"][0]["status"], "working");
     assert_eq!(live["live"][1]["agent"], "claude");
     assert_eq!(live["live"][1]["status"], "idle");
+}
+
+fn codex_event(timestamp: &str, payload: Value) -> Value {
+    json!({"timestamp":timestamp,"type":"event_msg","payload":payload})
+}
+
+/// 目前版本的 Codex：使用者訊息以 item_completed 的 UserMessage 記錄。
+fn codex_user_item(timestamp: &str, text: &str) -> Value {
+    codex_event(
+        timestamp,
+        json!({"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":text}]}}),
+    )
+}
+
+/// 較舊版本的 Codex：event_msg 的 user_message。
+fn codex_user_event(timestamp: &str, text: &str) -> Value {
+    codex_event(timestamp, json!({"type":"user_message","message":text}))
+}
+
+/// response_item 形式的使用者訊息（含系統自動注入的內容也是這種形式）。
+fn codex_user_response(timestamp: &str, parts: &[&str]) -> Value {
+    let content: Vec<Value> = parts
+        .iter()
+        .map(|text| json!({"type":"input_text","text":text}))
+        .collect();
+    json!({"timestamp":timestamp,"type":"response_item","payload":{"type":"message","role":"user","content":content}})
+}
+
+async fn server_with_codex_rollout(lines: &[Value]) -> LiveServer {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "done");
+    server.codex_rollout(T1, lines);
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+    server
+}
+
+#[tokio::test]
+async fn codex_card_shows_the_last_instruction_and_when_for_every_message_format() {
+    for message in [
+        codex_user_item("2026-10-23T08:00:00.000Z", "幫我修好登入頁"),
+        codex_user_event("2026-10-23T08:00:00.000Z", "幫我修好登入頁"),
+        codex_user_response("2026-10-23T08:00:00.000Z", &["幫我修好登入頁"]),
+    ] {
+        let server = server_with_codex_rollout(&[
+            codex_user_item("2026-10-23T07:00:00.000Z", "更早的指令"),
+            message,
+        ])
+        .await;
+
+        let live = server.live().await;
+
+        assert_eq!(live["live"][0]["lastPrompt"], "幫我修好登入頁");
+        assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+    }
+}
+
+#[tokio::test]
+async fn text_injected_by_codex_is_not_mistaken_for_an_instruction() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "幫我修好登入頁"),
+        codex_user_response(
+            "2026-10-23T08:05:00.000Z",
+            &[
+                "# AGENTS.md instructions for /work/erp\n\n<INSTRUCTIONS>...</INSTRUCTIONS>",
+                "<environment_context>\n  <cwd>/work/erp</cwd>\n</environment_context>",
+            ],
+        ),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "幫我修好登入頁");
+    assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+}
+
+#[tokio::test]
+async fn a_codex_instruction_older_than_the_tail_window_is_still_found() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "done");
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+    let filler = codex_event(
+        "2026-10-23T08:00:00.000Z",
+        json!({"type":"agent_message","message":"長".repeat(1000)}),
+    );
+    let text = format!(
+        "{}\n{}",
+        codex_user_item("2026-10-23T07:00:00.000Z", "很久以前下的指令"),
+        format!("{filler}\n").repeat(400)
+    );
+    assert!(text.len() > 400_000);
+    fs::write(
+        server
+            .root
+            .join(format!("codex/sessions/rollout-{T1}.jsonl")),
+        text,
+    )
+    .unwrap();
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "很久以前下的指令");
+    assert_eq!(live["live"][0]["promptAt"], 1792738800000u64);
+}
+
+#[tokio::test]
+async fn a_long_turn_whose_start_is_older_than_the_tail_window_is_still_working() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", None, 1000, "user", "done");
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+    let output = codex_event(
+        "2026-10-23T08:00:01.000Z",
+        json!({"type":"agent_message","message":"長".repeat(1000)}),
+    );
+    // 回合開始之後有 400 KB 以上的輸出，尾端範圍裡已經看不到任何回合事件
+    let text = format!(
+        "{}\n{}{}\n",
+        codex_event(
+            "2026-10-23T08:00:00.000Z",
+            json!({"type":"task_started","turn_id":"t1"})
+        ),
+        format!("{output}\n").repeat(400),
+        // 最後的指令就在尾端範圍裡，只有回合狀態需要往前找
+        codex_user_item("2026-10-23T08:10:00.000Z", "補一個指令")
+    );
+    assert!(text.len() > 400_000);
+    fs::write(
+        server
+            .root
+            .join(format!("codex/sessions/rollout-{T1}.jsonl")),
+        text,
+    )
+    .unwrap();
+
+    assert_eq!(server.live().await["live"][0]["status"], "working");
 }
