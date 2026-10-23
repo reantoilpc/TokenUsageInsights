@@ -83,3 +83,28 @@
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+.live-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.live-card-prompt {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.live-card-time {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}

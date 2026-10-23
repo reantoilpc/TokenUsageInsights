@@ -1,0 +1,157 @@
+//! Claude Code 對話紀錄（jsonl）的讀取：只讀尾端；尾端找不到時回頭掃整份檔案。
+//! 結果以「檔案大小＋修改時間」為鍵快取，檔案沒變就不重讀。
+
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
+};
+
+/// 對話紀錄可能超過數 MB，平常只讀最後這麼多位元組。
+const TAIL_BYTES: u64 = 400_000;
+/// 這幾種「看起來像標籤」的使用者訊息，其實是人自己打的 shell 指令或斜線指令。
+const TYPED_TAGS: [&str; 3] = ["<bash-input", "<command-name", "<command-message"];
+
+#[derive(Clone, Default)]
+pub struct Prompt {
+    pub text: String,
+    /// 該則訊息的時間（epoch 毫秒）。
+    pub at: Option<u64>,
+}
+
+#[derive(Clone, Default)]
+pub struct Transcript {
+    pub last_prompt: Option<Prompt>,
+}
+
+type Cache = Mutex<HashMap<PathBuf, (u64, SystemTime, Transcript)>>;
+static CACHE: OnceLock<Cache> = OnceLock::new();
+
+pub fn read(path: &Path) -> Transcript {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Transcript::default();
+    };
+    let stamp = (
+        meta.len(),
+        meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+    );
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((size, mtime, parsed)) = cache.lock().unwrap().get(path) {
+        if (*size, *mtime) == stamp {
+            return parsed.clone();
+        }
+    }
+    let parsed = parse(path, stamp.0);
+    cache
+        .lock()
+        .unwrap()
+        .insert(path.to_path_buf(), (stamp.0, stamp.1, parsed.clone()));
+    parsed
+}
+
+fn parse(path: &Path, len: u64) -> Transcript {
+    let Ok(mut file) = File::open(path) else {
+        return Transcript::default();
+    };
+    let start = len.saturating_sub(TAIL_BYTES);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err()
+        || file
+            .by_ref()
+            .take(TAIL_BYTES)
+            .read_to_end(&mut bytes)
+            .is_err()
+    {
+        return Transcript::default();
+    }
+    // 尾端的起點可能落在某一行中間；那一行不是完整的 JSON，解析失敗時會被略過
+    let text = String::from_utf8_lossy(&bytes);
+    let mut last_prompt = last_typed(text.lines());
+    if last_prompt.is_none() && start > 0 {
+        // 最後一個指令早在尾端範圍之前：回頭掃整份檔案
+        if file.seek(SeekFrom::Start(0)).is_ok() {
+            let lines = BufReader::new(file)
+                .split(b'\n')
+                .map_while(Result::ok)
+                .map(|line| String::from_utf8_lossy(&line).into_owned());
+            last_prompt = last_typed(lines);
+        }
+    }
+    Transcript { last_prompt }
+}
+
+fn last_typed<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Option<Prompt> {
+    let mut last = None;
+    for line in lines {
+        let line = line.as_ref();
+        if !line.contains("\"user\"") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue; // 被截斷或壞掉的行
+        };
+        if let Some(text) = typed_text(&entry) {
+            last = Some(Prompt {
+                text,
+                at: timestamp_ms(&entry),
+            });
+        }
+    }
+    last
+}
+
+/// 只有「人自己打的字」才算指令：排除工具回傳、meta 訊息、子 agent、背景任務通知與指令輸出。
+fn typed_text(entry: &Value) -> Option<String> {
+    if entry["type"] != "user" || entry["isMeta"] == true || entry["isSidechain"] == true {
+        return None;
+    }
+    let text = match &entry["message"]["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => {
+            if parts.iter().any(|part| part["type"] == "tool_result") {
+                return None;
+            }
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter(|part| part["type"] == "text")
+                .filter_map(|part| part["text"].as_str())
+                .collect();
+            texts.join("\n")
+        }
+        _ => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.starts_with('<') && !TYPED_TAGS.iter().any(|tag| text.starts_with(tag)) {
+        return None;
+    }
+    Some(display_text(text))
+}
+
+/// 把人打的 shell 指令與斜線指令還原成原本打的樣子。
+fn display_text(text: &str) -> String {
+    if let Some(command) = tag_content(text, "bash-input") {
+        return format!("! {}", command.trim());
+    }
+    if let Some(name) = tag_content(text, "command-name") {
+        let args = tag_content(text, "command-args").unwrap_or("").trim();
+        return format!("{} {args}", name.trim()).trim().to_string();
+    }
+    text.to_string()
+}
+
+fn tag_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let rest = &text[text.find(&format!("<{tag}>"))? + tag.len() + 2..];
+    Some(&rest[..rest.find(&format!("</{tag}>"))?])
+}
+
+fn timestamp_ms(entry: &Value) -> Option<u64> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(entry["timestamp"].as_str()?).ok()?;
+    u64::try_from(parsed.timestamp_millis()).ok()
+}

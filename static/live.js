@@ -16,6 +16,13 @@ function element(tag, className, text) {
   return node;
 }
 
+function ago(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s 前`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m 前` : `${Math.floor(minutes / 60)}h 前`;
+}
+
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
 function renderCard(session) {
   const card = element('article', `live-card live-status-${session.status}`);
@@ -26,6 +33,13 @@ function renderCard(session) {
   );
   const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
   card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
+  if (session.lastPrompt) {
+    // 最後一行：我最後下的指令，時間只有一個、無標籤、靠最右
+    const foot = element('div', 'live-card-foot');
+    foot.append(element('span', 'live-card-prompt', session.lastPrompt));
+    if (session.promptAt) foot.append(element('span', 'live-card-time', ago(Date.now() - session.promptAt)));
+    card.append(foot);
+  }
   return card;
 }
 

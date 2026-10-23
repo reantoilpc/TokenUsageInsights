@@ -1,10 +1,12 @@
 //! 「進行中」即時 session API：回傳目前還開著的 session 與最近結束的 session。
 //! 即時狀態不進資料庫，每次請求即時讀取。
 
+mod transcript;
+
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +17,9 @@ struct LiveSession {
     folder: String,
     status: &'static str,
     updated_at: u64,
+    /// 我最後打的一個指令與它的時間（epoch 毫秒）。
+    last_prompt: Option<String>,
+    prompt_at: Option<u64>,
 }
 
 /// Claude Code 自己維護的 session 登記檔（`<CLAUDE_DIR>/sessions/<pid>.json`）。
@@ -61,7 +66,7 @@ fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .filter_map(|text| serde_json::from_str::<Registered>(&text).ok())
         .filter(Registered::is_open)
-        .map(into_live_session)
+        .map(|registered| into_live_session(registered, claude_dir))
         .collect();
     sessions.sort_by(|a, b| {
         status_rank(a.status)
@@ -71,11 +76,14 @@ fn claude_sessions(claude_dir: &Path) -> Vec<LiveSession> {
     sessions
 }
 
-fn into_live_session(registered: Registered) -> LiveSession {
+fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
     let folder = Path::new(&registered.cwd).file_name().map_or_else(
         || registered.cwd.clone(),
         |name| name.to_string_lossy().into_owned(),
     );
+    let prompt = transcript_path(claude_dir, &registered.cwd, &registered.session_id)
+        .map(|path| transcript::read(&path))
+        .and_then(|transcript| transcript.last_prompt);
     LiveSession {
         agent: "claude",
         id: registered.session_id,
@@ -87,7 +95,34 @@ fn into_live_session(registered: Registered) -> LiveSession {
             _ => "idle",
         },
         updated_at: registered.updated_at.unwrap_or(0),
+        prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
+        last_prompt: prompt.map(|prompt| prompt.text),
     }
+}
+
+/// 對話紀錄：`projects/<工作資料夾路徑，非英數字元換成連字號>/<session id>.jsonl`。
+fn transcript_path(claude_dir: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
+    if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id == ".." {
+        return None; // 登記檔的內容不可信，不讓它指到別的路徑
+    }
+    let project: String = cwd
+        .chars()
+        .flat_map(|c| {
+            let dashes = if c.is_ascii_alphanumeric() {
+                0
+            } else {
+                c.len_utf16()
+            };
+            // 與 Claude Code 一致：以 UTF-16 單位計，補增字元會變成兩個連字號
+            std::iter::repeat_n('-', dashes).chain(c.is_ascii_alphanumeric().then_some(c))
+        })
+        .collect();
+    Some(
+        claude_dir
+            .join("projects")
+            .join(project)
+            .join(format!("{session_id}.jsonl")),
+    )
 }
 
 /// 排序用：等你回覆 > 工作中 > 閒置。

@@ -185,6 +185,19 @@ impl LiveServer {
         fs::write(dir.join(format!("{pid}.json")), fields.to_string()).unwrap();
     }
 
+    /// 寫入某個 session 的對話紀錄；`project_dir` 是 Claude Code 把工作資料夾路徑編碼後的資料夾名
+    /// （非英數字元換成連字號，例如 `/work/erp` 對應 `-work-erp`）。
+    fn transcript(&self, project_dir: &str, session_id: &str, lines: &[Value]) {
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        self.transcript_raw(project_dir, session_id, &text);
+    }
+
+    fn transcript_raw(&self, project_dir: &str, session_id: &str, text: &str) {
+        let dir = self.root.join("claude/projects").join(project_dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{session_id}.jsonl")), text).unwrap();
+    }
+
     async fn get_text(&self, path: &str) -> (u16, String) {
         let response = client()
             .get(format!("{}{path}", self.url))
@@ -380,4 +393,144 @@ async fn live_sessions_are_ordered_by_status_then_most_recent_activity() {
         .map(|item| &item["id"])
         .collect();
     assert_eq!(ids, vec!["shell-new", "busy-old", "idle-new", "idle-old"]);
+}
+
+fn typed(text: &str, timestamp: &str) -> Value {
+    json!({"type":"user","timestamp":timestamp,"message":{"role":"user","content":text}})
+}
+
+fn reply(timestamp: &str) -> Value {
+    json!({"type":"assistant","timestamp":timestamp,"message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}})
+}
+
+/// 啟動一個還活著的 session 並寫入對話紀錄，回傳伺服器。
+async fn server_with_transcript(lines: &[Value]) -> LiveServer {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    server.transcript("-work-erp", "s-1", lines);
+    server
+}
+
+#[tokio::test]
+async fn card_carries_the_last_thing_the_person_typed_and_when() {
+    let server = server_with_transcript(&[
+        typed("先看一下登入頁", "2026-10-23T07:00:00.000Z"),
+        reply("2026-10-23T07:00:05.000Z"),
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        reply("2026-10-23T08:00:09.000Z"),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "幫我修好登入頁");
+    assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+}
+
+#[tokio::test]
+async fn only_what_the_person_typed_counts_as_an_instruction() {
+    let tool_result = json!({"type":"user","timestamp":"2026-10-23T08:01:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}});
+    let meta = json!({"type":"user","isMeta":true,"timestamp":"2026-10-23T08:02:00.000Z","message":{"role":"user","content":"Caveat: local commands"}});
+    let sidechain = json!({"type":"user","isSidechain":true,"timestamp":"2026-10-23T08:03:00.000Z","message":{"role":"user","content":"子 agent 的任務說明"}});
+    let server = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        tool_result,
+        meta,
+        sidechain,
+        typed(
+            "<task-notification>done</task-notification>",
+            "2026-10-23T08:04:00.000Z",
+        ),
+        typed("<bash-stdout>ok</bash-stdout>", "2026-10-23T08:04:30.000Z"),
+        typed(
+            "<local-command-stdout>x</local-command-stdout>",
+            "2026-10-23T08:05:00.000Z",
+        ),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "幫我修好登入頁");
+    assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+}
+
+#[tokio::test]
+async fn shell_commands_slash_commands_and_pasted_images_count_as_typed() {
+    let server = server_with_transcript(&[typed(
+        "<bash-input>git status</bash-input>",
+        "2026-10-23T08:00:00.000Z",
+    )])
+    .await;
+    assert_eq!(server.live().await["live"][0]["lastPrompt"], "! git status");
+
+    let server = server_with_transcript(&[typed(
+        "<command-message>board</command-message>\n<command-name>/board</command-name>\n<command-args>now</command-args>",
+        "2026-10-23T08:00:00.000Z",
+    )])
+    .await;
+    assert_eq!(server.live().await["live"][0]["lastPrompt"], "/board now");
+
+    let with_image = json!({"type":"user","timestamp":"2026-10-23T08:00:00.000Z","message":{"role":"user","content":[{"type":"image"},{"type":"text","text":"看這張圖"}]}});
+    let server = server_with_transcript(&[with_image]).await;
+    assert_eq!(server.live().await["live"][0]["lastPrompt"], "看這張圖");
+}
+
+#[tokio::test]
+async fn a_session_without_a_transcript_is_still_listed_without_an_instruction() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-new", "/work/erp", "idle", 1000));
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["id"], "s-new");
+    assert_eq!(live["live"][0]["lastPrompt"], Value::Null);
+    assert_eq!(live["live"][0]["promptAt"], Value::Null);
+}
+
+/// 超過尾端讀取範圍的長對話：把一行很長的助理回覆重複寫進去。
+fn filler(timestamp: &str, count: usize) -> String {
+    let line = format!("{}\n", reply(timestamp)).replace("好的", &"長".repeat(1000));
+    line.repeat(count)
+}
+
+#[tokio::test]
+async fn a_cut_first_line_in_the_tail_window_does_not_break_parsing() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    // 約 500 KB 的填充，讓尾端 400 KB 的起點落在某一行的中間
+    let text = format!(
+        "{}{}\n",
+        filler("2026-10-23T07:00:00.000Z", 170),
+        typed("尾端裡的指令", "2026-10-23T08:00:00.000Z")
+    );
+    server.transcript_raw("-work-erp", "s-1", &text);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "尾端裡的指令");
+    assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+}
+
+#[tokio::test]
+async fn an_instruction_older_than_the_tail_window_is_found_by_scanning_the_whole_file() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    // 超過 4 MiB，而且最後一個指令在檔案最前面
+    let text = format!(
+        "{}\n{}",
+        typed("很久以前下的指令", "2026-10-23T07:00:00.000Z"),
+        filler("2026-10-23T08:00:00.000Z", 5000)
+    );
+    assert!(text.len() > 4 * 1024 * 1024);
+    server.transcript_raw("-work-erp", "s-1", &text);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "很久以前下的指令");
+    assert_eq!(live["live"][0]["promptAt"], 1792738800000u64);
 }
