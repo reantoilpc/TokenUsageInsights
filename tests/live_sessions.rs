@@ -534,3 +534,71 @@ async fn an_instruction_older_than_the_tail_window_is_found_by_scanning_the_whol
     assert_eq!(live["live"][0]["lastPrompt"], "很久以前下的指令");
     assert_eq!(live["live"][0]["promptAt"], 1792738800000u64);
 }
+
+fn todo_write(todos: &[(&str, &str, &str)]) -> Value {
+    let todos: Vec<Value> = todos
+        .iter()
+        .map(|(content, active, status)| json!({"content":content,"activeForm":active,"status":status}))
+        .collect();
+    json!({"type":"assistant","timestamp":"2026-10-23T08:00:10.000Z","message":{"role":"assistant","content":[
+        {"type":"text","text":"更新待辦"},
+        {"type":"tool_use","id":"t-todo","name":"TodoWrite","input":{"todos":todos}}
+    ]}})
+}
+
+#[tokio::test]
+async fn card_shows_how_many_todos_are_done_and_which_one_is_running() {
+    let server = server_with_transcript(&[
+        typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+        todo_write(&[
+            ("寫測試", "寫測試中", "pending"),
+            ("實作", "實作中", "in_progress"),
+            ("設計", "設計中", "completed"),
+        ]),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(
+        live["live"][0]["progress"],
+        json!({"done":1,"total":3,"current":"實作中"})
+    );
+}
+
+#[tokio::test]
+async fn the_latest_todo_update_wins_and_a_finished_list_has_no_running_item() {
+    let server = server_with_transcript(&[
+        typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+        todo_write(&[
+            ("設計", "設計中", "in_progress"),
+            ("實作", "實作中", "pending"),
+        ]),
+        todo_write(&[
+            ("設計", "設計中", "completed"),
+            ("實作", "實作中", "completed"),
+        ]),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(
+        live["live"][0]["progress"],
+        json!({"done":2,"total":2,"current":null})
+    );
+}
+
+#[tokio::test]
+async fn a_session_without_todos_has_no_progress() {
+    let server = server_with_transcript(&[typed("隨便問問", "2026-10-23T08:00:00.000Z")]).await;
+    assert_eq!(server.live().await["live"][0]["progress"], Value::Null);
+
+    let server = server_with_transcript(&[
+        typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+        todo_write(&[("設計", "設計中", "in_progress")]),
+        todo_write(&[]),
+    ])
+    .await;
+    assert_eq!(server.live().await["live"][0]["progress"], Value::Null);
+}

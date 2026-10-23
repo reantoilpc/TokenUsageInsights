@@ -1,6 +1,7 @@
 //! Claude Code 對話紀錄（jsonl）的讀取：只讀尾端；尾端找不到時回頭掃整份檔案。
 //! 結果以「檔案大小＋修改時間」為鍵快取，檔案沒變就不重讀。
 
+use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -23,9 +24,18 @@ pub struct Prompt {
     pub at: Option<u64>,
 }
 
+/// 待辦清單的進度：完成幾項／共幾項，以及目前進行中那一項的文字。
+#[derive(Clone, Default, Serialize)]
+pub struct Progress {
+    pub done: usize,
+    pub total: usize,
+    pub current: Option<String>,
+}
+
 #[derive(Clone, Default)]
 pub struct Transcript {
     pub last_prompt: Option<Prompt>,
+    pub progress: Option<Progress>,
 }
 
 type Cache = Mutex<HashMap<PathBuf, (u64, SystemTime, Transcript)>>;
@@ -70,38 +80,71 @@ fn parse(path: &Path, len: u64) -> Transcript {
     }
     // 尾端的起點可能落在某一行中間；那一行不是完整的 JSON，解析失敗時會被略過
     let text = String::from_utf8_lossy(&bytes);
-    let mut last_prompt = last_typed(text.lines());
-    if last_prompt.is_none() && start > 0 {
-        // 最後一個指令早在尾端範圍之前：回頭掃整份檔案
-        if file.seek(SeekFrom::Start(0)).is_ok() {
-            let lines = BufReader::new(file)
-                .split(b'\n')
-                .map_while(Result::ok)
-                .map(|line| String::from_utf8_lossy(&line).into_owned());
-            last_prompt = last_typed(lines);
-        }
+    let mut found = scan(text.lines());
+    if found.last_prompt.is_none() && start > 0 && file.seek(SeekFrom::Start(0)).is_ok() {
+        // 最後一個指令早在尾端範圍之前：回頭掃整份檔案找指令。
+        // ponytail: 待辦進度只看尾端；每次檔案變動都掃整檔太貴，更早的清單也已過時
+        let lines = BufReader::new(file)
+            .split(b'\n')
+            .map_while(Result::ok)
+            .map(|line| String::from_utf8_lossy(&line).into_owned());
+        found.last_prompt = scan(lines).last_prompt;
     }
-    Transcript { last_prompt }
+    found.progress = found.progress.filter(|progress| progress.total > 0);
+    found
 }
 
-fn last_typed<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Option<Prompt> {
-    let mut last = None;
+fn scan<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Transcript {
+    let mut found = Transcript::default();
     for line in lines {
         let line = line.as_ref();
-        if !line.contains("\"user\"") {
+        let maybe_prompt = line.contains("\"user\"");
+        let maybe_todos = line.contains("TodoWrite");
+        if !maybe_prompt && !maybe_todos {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue; // 被截斷或壞掉的行
         };
         if let Some(text) = typed_text(&entry) {
-            last = Some(Prompt {
+            found.last_prompt = Some(Prompt {
                 text,
                 at: timestamp_ms(&entry),
             });
         }
+        if let Some(progress) = todo_progress(&entry) {
+            found.progress = Some(progress);
+        }
     }
-    last
+    found
+}
+
+/// 一次 TodoWrite 呼叫就是一份完整的清單；最後一次呼叫代表目前的進度。
+fn todo_progress(entry: &Value) -> Option<Progress> {
+    let call = entry["message"]["content"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|part| part["type"] == "tool_use" && part["name"] == "TodoWrite")?;
+    let todos = call["input"]["todos"].as_array()?;
+    let current = todos
+        .iter()
+        .find(|todo| todo["status"] == "in_progress")
+        .and_then(|todo| {
+            todo["activeForm"]
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .or_else(|| todo["content"].as_str())
+        })
+        .map(str::to_string);
+    Some(Progress {
+        done: todos
+            .iter()
+            .filter(|todo| todo["status"] == "completed")
+            .count(),
+        total: todos.len(),
+        current,
+    })
 }
 
 /// 只有「人自己打的字」才算指令：排除工具回傳、meta 訊息、子 agent、背景任務通知與指令輸出。

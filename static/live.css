@@ -108,3 +108,33 @@
   font-size: 0.85rem;
   white-space: nowrap;
 }
+
+.live-card-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.live-bar {
+  flex: none;
+  width: 72px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--glass-border);
+  overflow: hidden;
+}
+
+.live-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--status-color);
+}
+
+.live-card-progress-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

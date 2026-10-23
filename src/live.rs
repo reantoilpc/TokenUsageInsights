@@ -20,6 +20,8 @@ struct LiveSession {
     /// 我最後打的一個指令與它的時間（epoch 毫秒）。
     last_prompt: Option<String>,
     prompt_at: Option<u64>,
+    /// 待辦清單進度；沒有清單時為 null。
+    progress: Option<transcript::Progress>,
 }
 
 /// Claude Code 自己維護的 session 登記檔（`<CLAUDE_DIR>/sessions/<pid>.json`）。
@@ -81,9 +83,10 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
         || registered.cwd.clone(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let prompt = transcript_path(claude_dir, &registered.cwd, &registered.session_id)
+    let transcript = transcript_path(claude_dir, &registered.cwd, &registered.session_id)
         .map(|path| transcript::read(&path))
-        .and_then(|transcript| transcript.last_prompt);
+        .unwrap_or_default();
+    let prompt = transcript.last_prompt;
     LiveSession {
         agent: "claude",
         id: registered.session_id,
@@ -97,6 +100,7 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
         updated_at: registered.updated_at.unwrap_or(0),
         prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
         last_prompt: prompt.map(|prompt| prompt.text),
+        progress: transcript.progress,
     }
 }
 

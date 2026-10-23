@@ -33,6 +33,7 @@ function renderCard(session) {
   );
   const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
   card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
+  if (session.progress) card.append(renderProgress(session.progress));
   if (session.lastPrompt) {
     // 最後一行：我最後下的指令，時間只有一個、無標籤、靠最右
     const foot = element('div', 'live-card-foot');
@@ -41,6 +42,16 @@ function renderCard(session) {
     card.append(foot);
   }
   return card;
+}
+
+function renderProgress({ done, total, current }) {
+  const bar = element('div', 'live-bar');
+  const fill = element('span', 'live-bar-fill');
+  fill.style.width = `${Math.round((done / total) * 100)}%`;
+  bar.append(fill);
+  const row = element('div', 'live-card-progress');
+  row.append(bar, element('span', 'live-card-progress-text', current ? `${done}/${total} ${current}` : `${done}/${total}`));
+  return row;
 }
 
 function render(data) {
