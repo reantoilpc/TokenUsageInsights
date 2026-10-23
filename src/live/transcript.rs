@@ -4,7 +4,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -15,6 +15,8 @@ use std::{
 /// 對話紀錄可能超過數 MB，平常只讀最後這麼多位元組。
 const TAIL_BYTES: u64 = 400_000;
 /// 這幾種「看起來像標籤」的使用者訊息，其實是人自己打的 shell 指令或斜線指令。
+/// 這些工具會停下來等人回答（選擇題、計畫核准）；一般的權限確認框紀錄裡看不出來。
+const ASKING_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 const TYPED_TAGS: [&str; 3] = ["<bash-input", "<command-name", "<command-message"];
 
 #[derive(Clone, Default)]
@@ -36,6 +38,8 @@ pub struct Progress {
 pub struct Transcript {
     pub last_prompt: Option<Prompt>,
     pub progress: Option<Progress>,
+    /// 有選擇題或計畫正在等人回答。
+    pub asking: bool,
 }
 
 type Cache = Mutex<HashMap<PathBuf, (u64, SystemTime, Transcript)>>;
@@ -96,11 +100,13 @@ fn parse(path: &Path, len: u64) -> Transcript {
 
 fn scan<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Transcript {
     let mut found = Transcript::default();
+    let mut unanswered: HashSet<String> = HashSet::new();
     for line in lines {
         let line = line.as_ref();
-        let maybe_prompt = line.contains("\"user\"");
+        let maybe_prompt = line.contains("\"user\""); // 工具回傳也是 user 訊息
         let maybe_todos = line.contains("TodoWrite");
-        if !maybe_prompt && !maybe_todos {
+        let maybe_ask = ASKING_TOOLS.iter().any(|tool| line.contains(tool));
+        if !maybe_prompt && !maybe_todos && !maybe_ask {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
@@ -115,8 +121,30 @@ fn scan<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Transcript {
         if let Some(progress) = todo_progress(&entry) {
             found.progress = Some(progress);
         }
+        track_questions(&entry, &mut unanswered);
     }
+    found.asking = !unanswered.is_empty();
     found
+}
+
+/// 記下還沒收到結果的選擇題／計畫核准呼叫；收到對應的 tool_result 就移除。
+fn track_questions(entry: &Value, unanswered: &mut HashSet<String>) {
+    let Some(parts) = entry["message"]["content"].as_array() else {
+        return;
+    };
+    for part in parts {
+        match part["type"].as_str() {
+            Some("tool_use") if ASKING_TOOLS.iter().any(|tool| part["name"] == *tool) => {
+                unanswered.extend(part["id"].as_str().map(str::to_string));
+            }
+            Some("tool_result") => {
+                if let Some(id) = part["tool_use_id"].as_str() {
+                    unanswered.remove(id);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// 一次 TodoWrite 呼叫就是一份完整的清單；最後一次呼叫代表目前的進度。

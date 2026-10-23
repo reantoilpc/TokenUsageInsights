@@ -602,3 +602,72 @@ async fn a_session_without_todos_has_no_progress() {
     .await;
     assert_eq!(server.live().await["live"][0]["progress"], Value::Null);
 }
+
+fn tool_call(name: &str, id: &str) -> Value {
+    json!({"type":"assistant","timestamp":"2026-10-23T08:00:20.000Z","message":{"role":"assistant","content":[
+        {"type":"tool_use","id":id,"name":name,"input":{}}
+    ]}})
+}
+
+fn tool_answer(id: &str) -> Value {
+    json!({"type":"user","timestamp":"2026-10-23T08:00:40.000Z","message":{"role":"user","content":[
+        {"type":"tool_result","tool_use_id":id,"content":"ok"}
+    ]}})
+}
+
+#[tokio::test]
+async fn a_question_waiting_for_the_person_marks_the_card_as_waiting_and_puts_it_first() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let (asking, busy) = (server.alive_pid(), server.alive_pid());
+    server.claude_session(asking, registered("s-ask", "/work/erp", "idle", 1000));
+    server.transcript(
+        "-work-erp",
+        "s-ask",
+        &[
+            typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+            tool_call("AskUserQuestion", "q1"),
+        ],
+    );
+    server.claude_session(busy, registered("s-busy", "/work/mango", "busy", 9000));
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["id"], "s-ask");
+    assert_eq!(live["live"][0]["status"], "waiting");
+    assert_eq!(live["live"][1]["id"], "s-busy");
+    assert_eq!(live["live"][1]["status"], "working");
+}
+
+#[tokio::test]
+async fn a_plan_waiting_for_approval_is_also_waiting() {
+    let server = server_with_transcript(&[
+        typed("規劃一下", "2026-10-23T08:00:00.000Z"),
+        tool_call("ExitPlanMode", "p1"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "waiting");
+}
+
+#[tokio::test]
+async fn once_the_question_is_answered_the_card_returns_to_its_registered_status() {
+    let server = server_with_transcript(&[
+        typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+        tool_call("AskUserQuestion", "q1"),
+        tool_answer("q1"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
+
+#[tokio::test]
+async fn a_slow_ordinary_tool_call_is_not_guessed_to_be_waiting() {
+    let server = server_with_transcript(&[
+        typed("跑測試", "2026-10-23T08:00:00.000Z"),
+        tool_call("Bash", "b1"),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["status"], "idle");
+}

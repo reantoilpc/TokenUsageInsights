@@ -94,6 +94,7 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
         folder,
         // ponytail: 登記檔只有 busy／idle／shell，shell 視為工作中；其餘一律當閒置
         status: match registered.status.as_deref() {
+            _ if transcript.asking => "waiting", // 正在等我回答，優先於登記檔的狀態
             Some("busy" | "shell") => "working",
             _ => "idle",
         },
