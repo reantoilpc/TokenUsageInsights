@@ -3,8 +3,8 @@
 
 use super::{
     ghostty,
-    transcript::{self, timestamp_ms, Progress, Prompt, Transcript},
-    LiveSession,
+    transcript::{self, timestamp_ms, Progress, Prompt, Scanner, Transcript},
+    EndedSession, LiveSession,
 };
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -39,14 +39,28 @@ struct Thread {
     cwd: String,
     name: Option<String>,
     updated_at: u64,
+    /// 建立這段對話的程式；終端機版是 codex-tui（VS Code 與桌面版是別的值）。
+    originator: Option<String>,
 }
+
+impl Thread {
+    /// 來源欄位不可靠（終端機接續 VS Code 建立的對話時仍記為 vscode），所以用 originator 判斷。
+    fn is_terminal(&self) -> bool {
+        self.originator.as_deref() == Some("codex-tui")
+    }
+}
+
+const CODEX: Scanner = Scanner {
+    scan: codex_scan,
+    tracks_turns: true,
+};
 
 pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
     let processes = processes();
     if processes.is_empty() {
         return Vec::new();
     }
-    let threads = threads(codex_dir); // 最近更新的在前
+    let threads = threads(codex_dir, 0); // 最近更新的在前
     let mut open: Vec<&Thread> = Vec::new();
 
     // `codex resume <id>` 已經指明是哪個對話
@@ -76,7 +90,11 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
     for (cwd, count) in by_folder {
         let candidates: Vec<&Thread> = threads
             .iter()
-            .filter(|thread| thread.cwd == cwd && !open.iter().any(|known| known.id == thread.id))
+            .filter(|thread| {
+                thread.cwd == cwd
+                    && thread.is_terminal()
+                    && !open.iter().any(|known| known.id == thread.id)
+            })
             .collect();
         let chosen = if candidates.len() > 1 {
             // 同資料夾有好幾個對話：看哪些有對應的分頁（標題是「名稱 | 資料夾」）
@@ -85,10 +103,12 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
                 .iter()
                 .copied()
                 .filter(|thread| {
+                    // 標題是「名稱 | 資料夾」：名稱後面要接分隔符號，否則「fix」會對到「fix login」
                     thread.name.as_deref().is_some_and(|name| {
+                        let prefix = format!("{name} | ");
                         tabs.iter()
                             .flatten()
-                            .any(|tab| tab.cwd == cwd && tab.title.starts_with(name))
+                            .any(|tab| tab.cwd == cwd && tab.title.starts_with(&prefix))
                     })
                 })
                 .collect();
@@ -107,8 +127,8 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
 }
 
 fn into_live_session(thread: &Thread) -> LiveSession {
-    let transcript = transcript::read(&thread.rollout_path, scan);
-    let prompt = transcript.last_prompt;
+    let transcript = transcript::read(&thread.rollout_path, &CODEX);
+    let (last_prompt, prompt_at) = Prompt::split(transcript.last_prompt);
     LiveSession {
         cwd: thread.cwd.clone(),
         agent: "codex",
@@ -121,14 +141,14 @@ fn into_live_session(thread: &Thread) -> LiveSession {
             (false, false) => "idle",
         },
         updated_at: thread.updated_at,
-        prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
-        last_prompt: prompt.map(|prompt| prompt.text),
+        last_prompt,
+        prompt_at,
         progress: transcript.progress,
     }
 }
 
 /// Codex 的對話紀錄（rollout）。
-fn scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
+fn codex_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
     let mut found = Transcript::default();
     for line in lines {
         let maybe_turn = TURN_EVENTS.iter().any(|event| line.contains(event));
@@ -307,31 +327,39 @@ fn cwds(pids: &[u32]) -> HashMap<u32, String> {
     cwds
 }
 
-/// Codex 的對話清單：只收使用者自己的對話，不收子 agent，也不收已封存的。
-fn threads(codex_dir: &Path) -> Vec<Thread> {
+/// Codex 的對話清單，最近更新的在前：只收使用者自己的對話，不收子 agent，也不收已封存的；
+/// 只要 `since_ms` 之後有動靜的。
+fn threads(codex_dir: &Path, since_ms: u64) -> Vec<Thread> {
     let Some(conn) = state_db(codex_dir).and_then(|path| open_read_only(&path)) else {
         return Vec::new();
     };
-    let Ok(mut statement) = conn.prepare(
-        "SELECT id, rollout_path, cwd, name, updated_at_ms FROM threads \
-         WHERE archived = 0 AND (thread_source IS NULL OR thread_source = 'user') \
-         ORDER BY updated_at_ms DESC",
-    ) else {
-        return Vec::new();
-    };
-    let rows = statement.query_map([], |row| {
-        Ok(Thread {
-            id: row.get(0)?,
-            rollout_path: PathBuf::from(row.get::<_, Option<String>>(1)?.unwrap_or_default()),
-            cwd: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            name: row
-                .get::<_, Option<String>>(3)?
-                .filter(|name| !name.is_empty()),
-            updated_at: row.get::<_, Option<u64>>(4)?.unwrap_or(0),
-        })
-    });
-    rows.map(|rows| rows.flatten().collect())
-        .unwrap_or_default()
+    // 舊版資料庫沒有 originator 欄位：改用固定值，不讓進行中的卡片整個消失
+    for originator in ["originator", "'codex-tui'"] {
+        let sql = format!(
+            "SELECT id, rollout_path, cwd, name, updated_at_ms, {originator} FROM threads \
+             WHERE archived = 0 AND (thread_source IS NULL OR thread_source = 'user') \
+             AND updated_at_ms >= ?1 ORDER BY updated_at_ms DESC"
+        );
+        let Ok(mut statement) = conn.prepare(&sql) else {
+            continue;
+        };
+        let rows = statement.query_map([since_ms], |row| {
+            Ok(Thread {
+                id: row.get(0)?,
+                rollout_path: PathBuf::from(row.get::<_, Option<String>>(1)?.unwrap_or_default()),
+                cwd: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                name: row
+                    .get::<_, Option<String>>(3)?
+                    .filter(|name| !name.is_empty()),
+                updated_at: row.get::<_, Option<u64>>(4)?.unwrap_or(0),
+                originator: row.get(5)?,
+            })
+        });
+        return rows
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default();
+    }
+    Vec::new()
 }
 
 /// 版本號最大的 `state_<n>.sqlite`。
@@ -372,44 +400,22 @@ fn open_read_only(path: &Path) -> Option<Connection> {
         .ok()
 }
 
-/// 24 小時內結束、來自終端機版（codex-tui）的對話。來源欄位不可靠（終端機接續 VS Code
-/// 建立的對話時仍是 vscode），所以用 originator 判斷；舊版資料庫沒有這個欄位時就不列。
-pub fn recent(codex_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<super::Recent> {
-    let Some(conn) = state_db(codex_dir).and_then(|path| open_read_only(&path)) else {
-        return Vec::new();
-    };
-    let Ok(mut statement) = conn.prepare(
-        "SELECT id, rollout_path, cwd, name, updated_at_ms FROM threads \
-         WHERE archived = 0 AND (thread_source IS NULL OR thread_source = 'user') \
-         AND originator = 'codex-tui' AND updated_at_ms >= ?1 ORDER BY updated_at_ms DESC",
-    ) else {
-        return Vec::new();
-    };
-    let rows = statement.query_map([since_ms], |row| {
-        Ok(Thread {
-            id: row.get(0)?,
-            rollout_path: PathBuf::from(row.get::<_, Option<String>>(1)?.unwrap_or_default()),
-            cwd: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            name: row
-                .get::<_, Option<String>>(3)?
-                .filter(|name| !name.is_empty()),
-            updated_at: row.get::<_, Option<u64>>(4)?.unwrap_or(0),
-        })
-    });
-    rows.map(|rows| rows.flatten().collect::<Vec<Thread>>())
-        .unwrap_or_default()
+/// 24 小時內結束、來自終端機版（codex-tui）的對話。
+pub fn recent(codex_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<EndedSession> {
+    threads(codex_dir, since_ms)
         .into_iter()
-        .filter(|thread| !open.contains(&thread.id))
+        .filter(|thread| thread.is_terminal() && !open.contains(&thread.id))
         .map(|thread| {
-            let prompt = transcript::read(&thread.rollout_path, scan).last_prompt;
-            super::Recent {
+            let (last_prompt, prompt_at) =
+                Prompt::split(transcript::read(&thread.rollout_path, &CODEX).last_prompt);
+            EndedSession {
                 folder: super::folder_of(&thread.cwd),
                 cwd: thread.cwd,
                 agent: "codex",
                 id: thread.id,
                 name: thread.name,
-                prompt_at: prompt.as_ref().and_then(|prompt| prompt.at),
-                last_prompt: prompt.map(|prompt| prompt.text),
+                last_prompt,
+                prompt_at,
                 updated_at: thread.updated_at,
             }
         })

@@ -130,6 +130,8 @@ impl LiveServer {
         // 預設沒有任何終端機程序，測試才不會讀到這台電腦真正在跑的 Codex
         fake.script("ps", "");
         fake.script("lsof", "");
+        // 同理：沒有 Ghostty，測試才不會去問這台電腦真正的 Ghostty
+        fake.script("osascript", "");
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -318,6 +320,16 @@ impl LiveServer {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap();
         (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// 以完全自訂的標頭送出 GET；回傳狀態碼與回應內文。
+    async fn get_raw(&self, path: &str, headers: &[(&str, &str)]) -> (u16, String) {
+        let mut request = client().get(format!("{}{path}", self.url));
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.unwrap();
+        (response.status().as_u16(), response.text().await.unwrap())
     }
 
     /// 像看板自己的頁面那樣送出 JSON POST：來源是伺服器自己的位址。
@@ -1903,4 +1915,132 @@ async fn the_script_opens_a_new_window_when_ghostty_has_none() {
     let script = &server.fake.calls("osascript")[0][1];
     assert!(script.contains("new window with configuration"));
     assert!(script.contains("new tab in front window with configuration"));
+}
+
+#[tokio::test]
+async fn the_live_list_is_not_readable_through_a_foreign_host_name() {
+    let server = server_with_transcript(&[typed("修好登入頁", "2026-10-23T08:00:00.000Z")]).await;
+    let port = server.port;
+
+    // DNS rebinding：別的網站把自己的網域指到 127.0.0.1，瀏覽器會帶著那個網域當 Host
+    let (status, body) = server
+        .get_raw("/api/live", &[("Host", &format!("evil.example:{port}"))])
+        .await;
+    assert_eq!(status, 403);
+    assert!(!body.contains("修好登入頁"));
+
+    for host in [format!("127.0.0.1:{port}"), format!("localhost:{port}")] {
+        let (status, body) = server.get_raw("/api/live", &[("Host", &host)]).await;
+        assert_eq!(status, 200, "{host}");
+        assert!(body.contains("修好登入頁"));
+    }
+}
+
+#[tokio::test]
+async fn a_registry_pid_that_cannot_name_one_process_is_never_alive() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let real = server.alive_pid();
+    server.claude_session(real, registered("s-real", "/work/erp", "idle", 1000));
+    // pid 0 是整個行程群組，4294967295 轉成帶號整數是 -1（所有行程）：kill(pid, 0) 都會回報「活著」
+    for bogus in [0u32, 4_294_967_295] {
+        server.claude_session(
+            bogus,
+            registered(&format!("s-{bogus}"), "/work/erp", "busy", 9000),
+        );
+    }
+
+    let live = server.live().await;
+
+    let ids: Vec<&Value> = live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| &item["id"])
+        .collect();
+    assert_eq!(ids, vec!["s-real"]);
+}
+
+#[tokio::test]
+async fn a_session_whose_transcript_says_it_is_a_background_run_is_not_live() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    // 登記檔只說它是互動式的，但對話紀錄標示為 sdk-cli
+    server.claude_session(pid, registered("s-1", "/work/erp", "busy", 1000));
+    let mut background = finished_conversation("s-1", "/work/erp", "背景任務", None);
+    background[0]["entrypoint"] = json!("sdk-cli");
+    server.transcript("-work-erp", "s-1", &background);
+
+    assert_eq!(server.live().await["live"], json!([]));
+}
+
+#[tokio::test]
+async fn a_todo_list_that_scrolled_out_of_the_tail_window_keeps_its_progress_bar() {
+    let server = server_with_transcript(&[
+        typed("做登入功能", "2026-10-23T08:00:00.000Z"),
+        todo_write(&[
+            ("設計", "設計中", "completed"),
+            ("實作", "實作中", "in_progress"),
+        ]),
+    ])
+    .await;
+    assert_eq!(server.live().await["live"][0]["progress"]["total"], 2);
+
+    // 之後 400 KB 以上的輸出把清單擠出尾端範圍
+    let path = server.root.join("claude/projects/-work-erp/s-1.jsonl");
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        filler("2026-10-23T09:00:00.000Z", 170).as_bytes(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        server.live().await["live"][0]["progress"],
+        json!({"done":1,"total":2,"current":"實作中"})
+    );
+}
+
+#[tokio::test]
+async fn a_process_without_an_id_never_maps_to_a_conversation_from_another_app() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(
+        T1,
+        "/work/erp",
+        Some("來自 VS Code 的較新對話"),
+        3000,
+        "user",
+        "done",
+    );
+    server.codex_originator(T1, "codex_vscode");
+    server.codex_thread(
+        T2,
+        "/work/erp",
+        Some("終端機裡的對話"),
+        1000,
+        "user",
+        "done",
+    );
+    server.processes(&[(101, "ttys003", "codex", "/work/erp")]);
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["終端機裡的對話"]);
+}
+
+#[tokio::test]
+async fn a_conversation_name_must_end_at_the_separator_to_match_a_tab_title() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/erp", Some("fix"), 3000, "user", "done");
+    server.codex_thread(T2, "/work/erp", Some("fix login"), 2000, "user", "done");
+    server.processes(&[
+        (101, "ttys003", "codex", "/work/erp"),
+        (102, "ttys004", "codex", "/work/erp"),
+    ]);
+    server
+        .fake
+        .script("osascript", &tabs(&[("/work/erp", "fix login | erp")]));
+
+    let live = server.live().await;
+
+    assert_eq!(names(&live), vec!["fix login"]);
 }

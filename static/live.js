@@ -16,18 +16,31 @@ function notify(text) {
   noticeTimer = setTimeout(() => (notice.textContent = ''), 4000);
 }
 
-// 只送 agent 與 id；資料夾與名稱由伺服器自己查
-async function focusSession(session) {
+// 只送 agent 與 id；資料夾、名稱與指令一律由伺服器自己決定。
+// 回傳 { ok, message }；錯誤內容不一定是 JSON，所以解析失敗時退回狀態碼。
+async function post(path, item) {
   try {
-    const response = await fetch('/api/live/focus', {
+    const response = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent: session.agent, id: session.id }),
+      body: JSON.stringify({ agent: item.agent, id: item.id }),
     });
-    if (!response.ok) notify((await response.json()).message || '無法跳轉');
+    if (response.ok) return { ok: true };
+    let message = '';
+    try {
+      message = (await response.json()).message;
+    } catch {
+      // 非 JSON 的錯誤內容
+    }
+    return { ok: false, message: message || `請求失敗（HTTP ${response.status}）` };
   } catch {
-    notify('無法連線到看板服務');
+    return { ok: false, message: '無法連線到看板服務' };
   }
+}
+
+async function focusSession(session) {
+  const result = await post('/api/live/focus', session);
+  if (!result.ok) notify(result.message);
 }
 
 const AGENT_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -79,41 +92,41 @@ function renderCard(session) {
   return card;
 }
 
-// 名稱規則：自訂標題；沒有就取最後指令的開頭；再沒有就用資料夾名稱
-// 只送 agent 與 id；資料夾與指令由伺服器決定。按下後先停用按鈕，避免連點開出兩個分頁
-async function resumeSession(item, button) {
-  button.disabled = true;
-  try {
-    const response = await fetch('/api/live/resume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent: item.agent, id: item.id }),
-    });
-    notify(response.ok ? '已在 Ghostty 開啟接續的分頁' : (await response.json()).message || '無法接續');
-  } catch {
-    notify('無法連線到看板服務');
-  }
-  setTimeout(() => (button.disabled = false), 3000);
+// 剛按過「接續」的 session：每 3 秒重畫時按鈕會重建，停用狀態要跨重畫保留，否則會連點開出兩個分頁
+const resuming = new Set();
+
+async function resumeSession(item) {
+  if (resuming.has(item.id)) return;
+  resuming.add(item.id);
+  document.querySelector(`[data-key="resume:${CSS.escape(item.id)}"]`)?.setAttribute('disabled', '');
+  const result = await post('/api/live/resume', item);
+  notify(result.ok ? '已在 Ghostty 開啟接續的分頁' : result.message);
+  setTimeout(() => resuming.delete(item.id), 5000);
 }
 
+// 名稱規則：自訂標題；沒有就取最後指令的開頭；再沒有就用資料夾名稱
 function recentTitle(item) {
   return item.name || (item.lastPrompt ? item.lastPrompt.slice(0, 30) : item.folder);
 }
 
 function renderRecent(item) {
   const row = element('article', 'live-card live-recent');
-  row.append(
-    element('div', 'live-card-head', ''),
-    element('div', 'live-card-meta', `${item.folder} · ${AGENT_LABEL[item.agent] || item.agent}`),
-  );
-  row.firstChild.append(element('span', 'live-card-title', recentTitle(item)));
+  const head = element('div', 'live-card-head');
+  head.append(element('span', 'live-card-title', recentTitle(item)));
   const foot = element('div', 'live-card-foot');
   if (item.lastPrompt) foot.append(element('span', 'live-card-prompt', item.lastPrompt));
   foot.append(element('span', 'live-card-time', ago(Date.now() - item.updatedAt)));
   const resume = element('button', 'live-resume', '接續');
   resume.type = 'button';
-  resume.addEventListener('click', () => resumeSession(item, resume));
-  row.append(foot, resume);
+  resume.dataset.key = `resume:${item.id}`;
+  resume.disabled = resuming.has(item.id);
+  resume.addEventListener('click', () => resumeSession(item));
+  row.append(
+    head,
+    element('div', 'live-card-meta', `${item.folder} · ${AGENT_LABEL[item.agent] || item.agent}`),
+    foot,
+    resume,
+  );
   return row;
 }
 
@@ -132,9 +145,9 @@ function render(data) {
   cards.hidden = data.live.length === 0;
   const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
   cards.replaceChildren(...data.live.map(renderCard));
-  if (focusedKey) cards.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map(renderRecent));
+  if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
   status.textContent = '';
 }
 
