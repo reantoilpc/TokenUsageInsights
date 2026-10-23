@@ -5,6 +5,28 @@ let timer = null;
 const cards = document.getElementById('live-cards');
 const empty = document.getElementById('live-empty');
 const status = document.getElementById('live-status');
+const notice = document.getElementById('live-notice');
+let noticeTimer = null;
+
+function notify(text) {
+  notice.textContent = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => (notice.textContent = ''), 4000);
+}
+
+// 只送 agent 與 id；資料夾與名稱由伺服器自己查
+async function focusSession(session) {
+  try {
+    const response = await fetch('/api/live/focus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: session.agent, id: session.id }),
+    });
+    if (!response.ok) notify((await response.json()).message || '無法跳轉');
+  } catch {
+    notify('無法連線到看板服務');
+  }
+}
 
 const AGENT_LABEL = { claude: 'Claude Code', codex: 'Codex' };
 const STATUS_LABEL = { waiting: '等你回覆', working: '工作中', idle: '閒置' };
@@ -26,6 +48,17 @@ function ago(ms) {
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
 function renderCard(session) {
   const card = element('article', `live-card live-status-${session.status}`);
+  card.dataset.key = `${session.agent}:${session.id}`;
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.title = '跳到這個 session 的 Ghostty 分頁';
+  card.addEventListener('click', () => focusSession(session));
+  card.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      focusSession(session);
+    }
+  });
   const head = element('div', 'live-card-head');
   head.append(
     element('span', 'live-card-title', session.name || session.folder),
@@ -57,7 +90,9 @@ function renderProgress({ done, total, current }) {
 function render(data) {
   empty.hidden = data.live.length > 0;
   cards.hidden = data.live.length === 0;
+  const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
   cards.replaceChildren(...data.live.map(renderCard));
+  if (focusedKey) cards.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
   status.textContent = '';
 }
 

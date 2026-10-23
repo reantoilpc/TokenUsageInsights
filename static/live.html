@@ -9,13 +9,14 @@
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=37">
-  <link rel="stylesheet" href="/static/live.css?v=4">
+  <link rel="stylesheet" href="/static/live.css?v=5">
 </head>
 <body>
   <main class="live-main">
     <header class="live-header">
       <a class="live-back" href="/">← Token 戰情室</a>
       <h1>進行中</h1>
+      <span id="live-notice" class="live-status live-notice" role="alert"></span>
       <span id="live-status" class="live-status" role="status"></span>
     </header>
     <section aria-label="進行中的 session">
@@ -23,6 +24,6 @@
       <p id="live-empty" class="live-empty">目前沒有進行中的 session</p>
     </section>
   </main>
-  <script src="/static/live.js?v=4"></script>
+  <script src="/static/live.js?v=5"></script>
 </body>
 </html>

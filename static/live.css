@@ -28,9 +28,17 @@
 }
 
 .live-status {
-  margin-left: auto;
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+.live-notice {
+  margin-left: auto;
+  color: var(--neon-gold);
+}
+
+.live-notice:empty + .live-status {
+  margin-left: auto;
 }
 
 .live-cards {
@@ -47,6 +55,7 @@
 
 .live-card {
   --status-color: var(--text-muted);
+  cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -137,4 +146,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.live-card:hover {
+  background: var(--card-bg-hover);
+}
+
+.live-card:focus-visible {
+  outline: 2px solid var(--status-color);
+  outline-offset: 2px;
 }

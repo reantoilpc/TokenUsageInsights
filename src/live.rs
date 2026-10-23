@@ -1,9 +1,17 @@
 //! 「進行中」即時 session API：回傳目前還開著的 session 與最近結束的 session。
 //! 即時狀態不進資料庫，每次請求即時讀取。
 
+mod ghostty;
 mod transcript;
 
-use axum::Json;
+use axum::{
+    http::{
+        header::{HOST, ORIGIN},
+        HeaderMap, StatusCode,
+    },
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -11,6 +19,9 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LiveSession {
+    /// 工作資料夾的完整路徑，只在伺服器內部用來跳轉與接續，不回給前端。
+    #[serde(skip)]
+    cwd: String,
     agent: &'static str,
     id: String,
     name: Option<String>,
@@ -88,6 +99,7 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> LiveSession {
         .unwrap_or_default();
     let prompt = transcript.last_prompt;
     LiveSession {
+        cwd: registered.cwd,
         agent: "claude",
         id: registered.session_id,
         name: registered.name.filter(|name| !name.is_empty()),
@@ -150,4 +162,70 @@ fn pid_alive(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn pid_alive(_pid: u32) -> bool {
     false
+}
+
+/// 前端只回報要操作哪個 session；資料夾與名稱一律由伺服器自己查，不信任請求端。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRef {
+    agent: String,
+    id: String,
+}
+
+fn failure(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "message": message }))).into_response()
+}
+
+/// 只接受看板自己頁面發出的請求：Origin 必須是本機位址，且與請求的 Host 一致。
+/// （只比對 Origin 與 Host 相等擋不住 DNS rebinding，所以 Host 也必須是本機。）
+fn from_dashboard(headers: &HeaderMap) -> bool {
+    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    let (Some(origin), Some(host)) = (header(ORIGIN), header(HOST)) else {
+        return false;
+    };
+    let hostname = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().map(|ip| format!("[{ip}]")),
+        None => host.split(':').next().map(str::to_string),
+    };
+    origin == format!("http://{host}")
+        && matches!(
+            hostname.as_deref(),
+            Some("localhost" | "127.0.0.1" | "[::1]")
+        )
+}
+
+fn find_session(request: &SessionRef) -> Option<LiveSession> {
+    if request.agent != "claude" {
+        return None;
+    }
+    claude_sessions(&crate::db::get_claude_dir())
+        .into_iter()
+        .find(|session| session.id == request.id)
+}
+
+pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> Response {
+    if !from_dashboard(&headers) {
+        return failure(StatusCode::FORBIDDEN, "請求來源不符");
+    }
+    let outcome = tokio::task::spawn_blocking(move || {
+        let session = find_session(&request)?;
+        Some(ghostty::focus(
+            &session.cwd,
+            session.name.as_deref().unwrap_or(""),
+        ))
+    })
+    .await
+    .ok()
+    .flatten();
+    match outcome {
+        None => failure(StatusCode::NOT_FOUND, "找不到這個 session"),
+        Some(ghostty::Focus::Done) => Json(json!({ "focused": true })).into_response(),
+        Some(ghostty::Focus::Missing) => {
+            failure(StatusCode::NOT_FOUND, "找不到這個 session 的分頁")
+        }
+        Some(ghostty::Focus::Unsupported) => failure(
+            StatusCode::NOT_IMPLEMENTED,
+            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
+        ),
+    }
 }

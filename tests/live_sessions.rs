@@ -11,8 +11,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// 一組放在 PATH 最前面的假指令。每個指令把收到的參數附加到 `<name>.args`，
-/// 並輸出 `<name>.out` 的內容（若存在）。
+/// 一組放在 PATH 最前面的假指令。每個指令把收到的參數附加到 `<name>.args`
+/// （一次呼叫一行，參數之間以 `\x1f` 分隔），並輸出 `<name>.out` 的內容（若存在）。
 struct FakeCommands {
     dir: PathBuf,
 }
@@ -26,12 +26,21 @@ impl FakeCommands {
 
     /// 建立假指令 `name`，執行時輸出 `stdout`。
     fn script(&self, name: &str, stdout: &str) {
+        self.write_script(name, stdout, 0);
+    }
+
+    /// 建立執行就失敗（結束碼 1）的假指令，模擬沒有 Ghostty 或不是 macOS。
+    fn failing(&self, name: &str) {
+        self.write_script(name, "", 1);
+    }
+
+    fn write_script(&self, name: &str, stdout: &str, exit_code: i32) {
         fs::write(self.dir.join(format!("{name}.out")), stdout).unwrap();
         let path = self.dir.join(name);
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\necho \"$@\" >> '{dir}/{name}.args'\ncat '{dir}/{name}.out' 2>/dev/null\n",
+                "#!/bin/sh\n{{ for a in \"$@\"; do printf '%s\\037' \"$a\" | tr '\\n' ' '; done; echo; }} >> '{dir}/{name}.args'\ncat '{dir}/{name}.out' 2>/dev/null\nexit {exit_code}\n",
                 dir = self.dir.display()
             ),
         )
@@ -43,10 +52,19 @@ impl FakeCommands {
         }
     }
 
-    /// 假指令被呼叫時收到的參數，每次呼叫一行。
-    fn calls(&self, name: &str) -> Vec<String> {
+    /// 假指令被呼叫時收到的參數：每次呼叫一組。
+    fn calls(&self, name: &str) -> Vec<Vec<String>> {
         fs::read_to_string(self.dir.join(format!("{name}.args")))
-            .map(|text| text.lines().map(str::to_string).collect())
+            .map(|text| {
+                text.lines()
+                    .map(|line| {
+                        line.split('\x1f')
+                            .filter(|arg| !arg.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -198,6 +216,30 @@ impl LiveServer {
         fs::write(dir.join(format!("{session_id}.jsonl")), text).unwrap();
     }
 
+    /// 以完全自訂的標頭送出 POST；回傳狀態碼與（若是 JSON 的）回應內容。
+    async fn post_raw(&self, path: &str, headers: &[(&str, &str)], body: &str) -> (u16, Value) {
+        let mut request = client()
+            .post(format!("{}{path}", self.url))
+            .body(body.to_string());
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap();
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// 像看板自己的頁面那樣送出 JSON POST：來源是伺服器自己的位址。
+    async fn post_json(&self, path: &str, body: Value) -> (u16, Value) {
+        self.post_raw(
+            path,
+            &[("Origin", &self.url), ("Content-Type", "application/json")],
+            &body.to_string(),
+        )
+        .await
+    }
+
     async fn get_text(&self, path: &str) -> (u16, String) {
         let response = client()
             .get(format!("{}{path}", self.url))
@@ -287,7 +329,10 @@ async fn fake_commands_answer_from_the_script_and_record_their_arguments() {
         String::from_utf8(output.stdout).unwrap(),
         "  101 ttys001 codex resume\n"
     );
-    assert_eq!(server.fake.calls("ps"), vec!["-axo pid,tty,command"]);
+    assert_eq!(
+        server.fake.calls("ps"),
+        vec![vec!["-axo".to_string(), "pid,tty,command".to_string()]]
+    );
 }
 
 fn registered(id: &str, cwd: &str, status: &str, updated_at: u64) -> Value {
@@ -670,4 +715,143 @@ async fn a_slow_ordinary_tool_call_is_not_guessed_to_be_waiting() {
     .await;
 
     assert_eq!(server.live().await["live"][0]["status"], "idle");
+}
+
+const FOCUS: &str = "/api/live/focus";
+
+/// 一個還活著、名稱為「芒果許」、在 /work/mango-hsu 的 Claude Code session（id 為 s-1）。
+async fn server_with_named_session() -> LiveServer {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered("s-1", "/work/mango-hsu", "idle", 1000);
+    session["name"] = json!("芒果許");
+    server.claude_session(pid, session);
+    server.fake.script("osascript", "ok\n");
+    server
+}
+
+#[tokio::test]
+async fn clicking_a_card_asks_ghostty_for_the_tab_in_that_folder_titled_with_the_session_name() {
+    let server = server_with_named_session().await;
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["focused"], true);
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0][0], "-e");
+    assert!(calls[0][1].contains("focus"));
+    assert_eq!(calls[0][2..], ["/work/mango-hsu", "芒果許"]);
+}
+
+#[tokio::test]
+async fn a_session_without_a_name_is_matched_by_folder_only() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    server.fake.script("osascript", "ok\n");
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls[0][2], "/work/erp");
+    assert_eq!(calls[0].get(3).map(String::as_str).unwrap_or(""), "");
+}
+
+#[tokio::test]
+async fn when_no_tab_matches_the_page_is_told_so_and_nothing_new_is_opened() {
+    let server = server_with_named_session().await;
+    server.fake.script("osascript", "missing\n");
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert_eq!(body["message"], "找不到這個 session 的分頁");
+    assert_eq!(server.fake.calls("osascript").len(), 1);
+}
+
+#[tokio::test]
+async fn without_ghostty_the_answer_is_a_clear_unsupported_message() {
+    let server = server_with_named_session().await;
+    server.fake.failing("osascript");
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 501);
+    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+}
+
+#[tokio::test]
+async fn focus_requests_that_do_not_come_from_the_dashboard_itself_are_refused() {
+    let server = server_with_named_session().await;
+    let body = json!({"agent":"claude","id":"s-1"}).to_string();
+    let json_type = ("Content-Type", "application/json");
+    let port = server.port;
+    let rebinding_origin = format!("http://evil.example:{port}");
+    let other_port_origin = format!("http://127.0.0.1:{}", port.wrapping_add(1));
+    let own_origin = server.url.clone();
+    let rebinding_host = format!("evil.example:{port}");
+
+    let attempts: Vec<(&str, Vec<(&str, &str)>)> = vec![
+        ("沒有 Origin", vec![json_type]),
+        (
+            "別的網站",
+            vec![json_type, ("Origin", "https://evil.example")],
+        ),
+        (
+            "本機但埠不同",
+            vec![json_type, ("Origin", &other_port_origin)],
+        ),
+        (
+            "DNS rebinding：Host 與 Origin 一致但不是本機",
+            vec![
+                json_type,
+                ("Origin", &rebinding_origin),
+                ("Host", &rebinding_host),
+            ],
+        ),
+        (
+            "內容類型不是 JSON",
+            vec![("Origin", &own_origin), ("Content-Type", "text/plain")],
+        ),
+    ];
+
+    for (label, headers) in attempts {
+        let (status, _) = server.post_raw(FOCUS, &headers, &body).await;
+        assert!(
+            (400..500).contains(&status),
+            "{label} 應被拒絕，卻回傳 {status}"
+        );
+    }
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn focus_only_accepts_an_agent_and_a_known_session_id() {
+    let server = server_with_named_session().await;
+
+    for body in [
+        json!({"agent":"claude","id":"does-not-exist"}),
+        json!({"agent":"vim","id":"s-1"}),
+        // 請求端不能自己指定資料夾、標題或指令
+        json!({"agent":"claude","id":"s-1","cwd":"/etc"}),
+        json!({"agent":"claude","id":"s-1","command":"rm -rf /"}),
+    ] {
+        let (status, _) = server.post_json(FOCUS, body.clone()).await;
+        assert!(
+            (400..500).contains(&status),
+            "{body} 應被拒絕，卻回傳 {status}"
+        );
+    }
+    assert!(server.fake.calls("osascript").is_empty());
 }
