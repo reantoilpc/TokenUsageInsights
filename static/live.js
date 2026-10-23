@@ -80,6 +80,22 @@ function renderCard(session) {
 }
 
 // 名稱規則：自訂標題；沒有就取最後指令的開頭；再沒有就用資料夾名稱
+// 只送 agent 與 id；資料夾與指令由伺服器決定。按下後先停用按鈕，避免連點開出兩個分頁
+async function resumeSession(item, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/live/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: item.agent, id: item.id }),
+    });
+    notify(response.ok ? '已在 Ghostty 開啟接續的分頁' : (await response.json()).message || '無法接續');
+  } catch {
+    notify('無法連線到看板服務');
+  }
+  setTimeout(() => (button.disabled = false), 3000);
+}
+
 function recentTitle(item) {
   return item.name || (item.lastPrompt ? item.lastPrompt.slice(0, 30) : item.folder);
 }
@@ -94,7 +110,10 @@ function renderRecent(item) {
   const foot = element('div', 'live-card-foot');
   if (item.lastPrompt) foot.append(element('span', 'live-card-prompt', item.lastPrompt));
   foot.append(element('span', 'live-card-time', ago(Date.now() - item.updatedAt)));
-  row.append(foot);
+  const resume = element('button', 'live-resume', '接續');
+  resume.type = 'button';
+  resume.addEventListener('click', () => resumeSession(item, resume));
+  row.append(foot, resume);
   return row;
 }
 

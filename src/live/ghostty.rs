@@ -96,3 +96,30 @@ pub fn focus(cwd: &str, name: &str, how: Match) -> Focus {
         Focus::Missing
     }
 }
+
+/// 在最前面的視窗開一個新分頁（沒有視窗就開新視窗）：資料夾以初始工作資料夾設定，
+/// 指令以初始輸入打進 shell，所以結束後分頁仍是一般的 shell。兩者都以參數傳入。
+const NEW_TAB_SCRIPT: &str = r#"on run argv
+  set wantDir to item 1 of argv
+  set wantInput to item 2 of argv
+  tell application "Ghostty"
+    set cfg to new surface configuration
+    set initial working directory of cfg to wantDir
+    set initial input of cfg to wantInput
+    if (count of windows) is 0 then
+      new window with configuration cfg
+    else
+      new tab in front window with configuration cfg
+    end if
+    activate
+  end tell
+  return "ok"
+end run"#;
+
+/// 開新分頁並輸入 `input`；沒有 Ghostty 或不是 macOS 時回傳 false。
+pub fn open_tab(cwd: &str, input: &str) -> bool {
+    Command::new("osascript")
+        .args(["-e", NEW_TAB_SCRIPT, cwd, input])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}

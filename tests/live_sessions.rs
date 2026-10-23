@@ -1726,3 +1726,181 @@ async fn an_earlier_copy_of_a_conversation_that_is_open_under_a_new_id_is_not_li
 
     assert_eq!(recent_ids(&live), vec!["s-other", "s-same-title"]);
 }
+
+const RESUME: &str = "/api/live/resume";
+const U1: &str = "6753eee6-ecd7-43f4-9ca6-703f0a2b6f10";
+const U2: &str = "0b2f6a54-7c6d-4a5e-9d0e-5f1f7a1c9e21";
+
+/// 一個已經結束的 Claude Code session（紀錄在 /work/erp，一小時前結束）。
+async fn server_with_an_ended_claude_session(cwd: &str) -> LiveServer {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.aged_transcript(
+        "-work-erp",
+        U1,
+        &finished_conversation(U1, cwd, "修好登入頁", Some("登入頁修正")),
+        HOUR,
+    );
+    server.fake.script("osascript", "ok\n");
+    server
+}
+
+#[tokio::test]
+async fn resuming_opens_a_tab_in_the_original_folder_running_only_the_fixed_command() {
+    let server = server_with_an_ended_claude_session("/work/erp").await;
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!((status, &body["resumed"]), (200, &json!(true)));
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0][2], "/work/erp");
+    assert_eq!(calls[0][3].trim_end(), format!("claude --resume {U1}"));
+}
+
+#[tokio::test]
+async fn a_codex_conversation_is_resumed_with_codex_resume() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(
+        T1,
+        "/work/erp",
+        Some("剛結束的"),
+        now_ms() - HOUR as i64 * 1000,
+        "user",
+        "done",
+    );
+    server.fake.script("osascript", "ok\n");
+
+    let (status, _) = server
+        .post_json(RESUME, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 200);
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls[0][2], "/work/erp");
+    assert_eq!(calls[0][3].trim_end(), format!("codex resume {T1}"));
+}
+
+#[tokio::test]
+async fn a_folder_with_spaces_and_shell_characters_is_passed_through_untouched() {
+    let cwd = "/work/my project/測試 & $(touch x); 'q'";
+    let server = server_with_an_ended_claude_session(cwd).await;
+
+    let (status, _) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!(status, 200);
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls[0][2], cwd);
+    assert_eq!(calls[0][3].trim_end(), format!("claude --resume {U1}"));
+}
+
+#[tokio::test]
+async fn only_ended_sessions_the_dashboard_knows_can_be_resumed() {
+    let mut server = server_with_an_ended_claude_session("/work/erp").await;
+    // 還開著的 session：接續會讓兩個程式搶同一份對話紀錄
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered(U2, "/work/erp", "idle", 1000));
+
+    for (label, body, expected) in [
+        ("還開著", json!({"agent":"claude","id":U2}), 409),
+        (
+            "不認識的 id",
+            json!({"agent":"claude","id":"11111111-2222-4333-8444-555555555555"}),
+            404,
+        ),
+        (
+            "id 格式不對",
+            json!({"agent":"claude","id":"x; rm -rf /"}),
+            400,
+        ),
+        ("agent 與 id 對不上", json!({"agent":"codex","id":U1}), 404),
+        ("不支援的 agent", json!({"agent":"vim","id":U1}), 404),
+    ] {
+        let (status, _) = server.post_json(RESUME, body).await;
+        assert_eq!(status, expected, "{label}");
+    }
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn the_request_cannot_choose_the_folder_or_the_command() {
+    let server = server_with_an_ended_claude_session("/work/erp").await;
+
+    for extra in [
+        json!({"cwd":"/etc"}),
+        json!({"command":"rm -rf /"}),
+        json!({"input":"x"}),
+    ] {
+        let mut body = json!({"agent":"claude","id":U1});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let (status, _) = server.post_json(RESUME, body).await;
+        assert!((400..500).contains(&status), "{status}");
+    }
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn resume_requests_from_anywhere_but_the_dashboard_are_refused() {
+    let server = server_with_an_ended_claude_session("/work/erp").await;
+    let body = json!({"agent":"claude","id":U1}).to_string();
+    let rebinding_host = format!("evil.example:{}", server.port);
+    let rebinding_origin = format!("http://{rebinding_host}");
+
+    for (label, headers) in [
+        ("沒有 Origin", vec![("Content-Type", "application/json")]),
+        (
+            "別的網站",
+            vec![
+                ("Content-Type", "application/json"),
+                ("Origin", "https://evil.example"),
+            ],
+        ),
+        (
+            "DNS rebinding",
+            vec![
+                ("Content-Type", "application/json"),
+                ("Origin", &rebinding_origin),
+                ("Host", &rebinding_host),
+            ],
+        ),
+        (
+            "內容類型不是 JSON",
+            vec![("Content-Type", "text/plain"), ("Origin", &server.url)],
+        ),
+    ] {
+        let (status, _) = server.post_raw(RESUME, &headers, &body).await;
+        assert!((400..500).contains(&status), "{label}: {status}");
+    }
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn without_ghostty_resume_answers_with_a_clear_unsupported_message() {
+    let server = server_with_an_ended_claude_session("/work/erp").await;
+    server.fake.failing("osascript");
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!(status, 501);
+    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+}
+
+#[tokio::test]
+async fn the_script_opens_a_new_window_when_ghostty_has_none() {
+    let server = server_with_an_ended_claude_session("/work/erp").await;
+
+    server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    let script = &server.fake.calls("osascript")[0][1];
+    assert!(script.contains("new window with configuration"));
+    assert!(script.contains("new tab in front window with configuration"));
+}

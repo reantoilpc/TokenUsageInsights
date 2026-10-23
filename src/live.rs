@@ -345,3 +345,39 @@ fn claude_recent(claude_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Ve
         .take(RECENT_LIMIT)
         .collect()
 }
+
+/// 為已結束的 session 開新分頁接續。只能執行固定的 `claude --resume <id>` 或
+/// `codex resume <id>`；id 必須是看板「最近結束」清單上的 session，資料夾由伺服器自己查。
+pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) -> Response {
+    if !from_dashboard(&headers) {
+        return failure(StatusCode::FORBIDDEN, "請求來源不符");
+    }
+    if !codex::is_uuid(&request.id) {
+        return failure(StatusCode::BAD_REQUEST, "session id 格式不正確");
+    }
+    let outcome = tokio::task::spawn_blocking(move || {
+        let live = live_sessions();
+        if live.iter().any(|session| session.id == request.id) {
+            return Err((StatusCode::CONFLICT, "這個 session 還開著，請直接跳過去"));
+        }
+        let ended = recent_sessions(&live)
+            .into_iter()
+            .find(|item| item.agent == request.agent && item.id == request.id)
+            .ok_or((StatusCode::NOT_FOUND, "找不到這個已結束的 session"))?;
+        let command = match ended.agent {
+            "codex" => format!("codex resume {}", ended.id),
+            _ => format!("claude --resume {}", ended.id),
+        };
+        Ok(ghostty::open_tab(&ended.cwd, &format!("{command}\n")))
+    })
+    .await;
+    match outcome {
+        Ok(Ok(true)) => Json(json!({ "resumed": true })).into_response(),
+        Ok(Ok(false)) => failure(
+            StatusCode::NOT_IMPLEMENTED,
+            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
+        ),
+        Ok(Err((status, message))) => failure(status, message),
+        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "內部錯誤"),
+    }
+}

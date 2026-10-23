@@ -273,7 +273,7 @@ fn interactive_codex(line: &str) -> Option<(u32, Option<String>)> {
     Some((pid, resumed))
 }
 
-fn is_uuid(text: &str) -> bool {
+pub(super) fn is_uuid(text: &str) -> bool {
     text.len() == 36
         && text.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
         && text.matches('-').count() == 4
