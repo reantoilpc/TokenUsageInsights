@@ -9,7 +9,7 @@
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=37">
-  <link rel="stylesheet" href="/static/live.css?v=7">
+  <link rel="stylesheet" href="/static/live.css?v=9">
 </head>
 <body>
   <main class="live-main">
@@ -21,14 +21,14 @@
     </header>
     <section aria-label="進行中的 session">
       <div id="live-cards" class="live-cards"></div>
-      <p id="live-empty" class="live-empty">目前沒有進行中的 session</p>
+      <p id="live-empty" class="live-empty" hidden>目前沒有進行中的 session</p>
     </section>
     <section aria-label="最近結束">
       <h2 class="live-section-title">最近結束</h2>
       <div id="recent-list" class="live-cards"></div>
-      <p id="recent-empty" class="live-empty live-empty-small">24 小時內沒有結束的 session</p>
+      <p id="recent-empty" class="live-empty live-empty-small" hidden>24 小時內沒有結束的 session</p>
     </section>
   </main>
-  <script src="/static/live.js?v=7"></script>
+  <script src="/static/live.js?v=8"></script>
 </body>
 </html>
