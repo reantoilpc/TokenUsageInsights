@@ -4,7 +4,9 @@
 mod claude;
 mod codex;
 mod ghostty;
+mod terminal;
 mod transcript;
+mod windows_terminal;
 
 use axum::{
     http::{
@@ -126,6 +128,8 @@ fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "message": message }))).into_response()
 }
 
+const NO_TERMINAL: &str = "無法操作終端機（支援 macOS 的 Ghostty 與 Windows 的 Windows Terminal）";
+
 /// Host 必須是本機位址。只比對 Origin 與 Host 相等擋不住 DNS rebinding（攻擊者的網域
 /// 指到 127.0.0.1 時兩者會一致），所以 Host 本身也必須是本機。
 fn loopback_host(headers: &HeaderMap) -> bool {
@@ -161,26 +165,18 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         return failure(StatusCode::FORBIDDEN, "請求來源不符");
     }
     let outcome = tokio::task::spawn_blocking(move || {
-        let session = find_session(&request)?;
-        Some(ghostty::focus(
-            &session.cwd,
-            session.name.as_deref().unwrap_or(""),
-            ghostty::TitleMatch::of(session.agent),
-        ))
+        find_session(&request).map(|session| terminal::focus(&session))
     })
     .await
     .ok()
     .flatten();
     match outcome {
         None => failure(StatusCode::NOT_FOUND, "找不到這個 session"),
-        Some(ghostty::Focus::Done) => Json(json!({ "focused": true })).into_response(),
-        Some(ghostty::Focus::Missing) => {
+        Some(terminal::Focus::Done) => Json(json!({ "focused": true })).into_response(),
+        Some(terminal::Focus::Missing) => {
             failure(StatusCode::NOT_FOUND, "找不到這個 session 的分頁")
         }
-        Some(ghostty::Focus::Unsupported) => failure(
-            StatusCode::NOT_IMPLEMENTED,
-            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
-        ),
+        Some(terminal::Focus::Unsupported) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
     }
 }
 
@@ -227,17 +223,15 @@ pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) ->
             .into_iter()
             .find(|item| item.agent == request.agent && item.id == request.id)
             .ok_or((StatusCode::NOT_FOUND, "找不到這個已結束的 session"))?;
-        Ok(ghostty::open_tab(
-            &ended.cwd,
-            &format!("{}\n", ended.resume_command()),
-        ))
+        Ok(terminal::open_tab(&ended.cwd, &ended.resume_command()))
     })
     .await;
     match outcome {
-        Ok(Ok(true)) => Json(json!({ "resumed": true })).into_response(),
-        Ok(Ok(false)) => failure(
+        Ok(Ok(terminal::Open::Done)) => Json(json!({ "resumed": true })).into_response(),
+        Ok(Ok(terminal::Open::Unsupported)) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
+        Ok(Ok(terminal::Open::UnsafeFolder)) => failure(
             StatusCode::NOT_IMPLEMENTED,
-            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
+            "資料夾名稱含有 ; \" 或 \\，無法安全地在 Windows Terminal 開啟",
         ),
         Ok(Err((status, message))) => failure(status, message),
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "內部錯誤"),

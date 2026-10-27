@@ -54,6 +54,8 @@ pub struct Transcript {
     pub running: Option<bool>,
     /// 使用者替這段對話取的名稱（Claude Code 的 custom-title）。
     pub title: Option<String>,
+    /// Claude Code 自動產生的標題（ai-title）；沒有取名時，分頁標題顯示的是它。
+    pub ai_title: Option<String>,
     /// 對話的工作資料夾，取自紀錄本身（已結束的 session 沒有登記檔可查）。
     pub cwd: Option<String>,
     /// 以 `claude -p` 這類背景方式執行的對話。
@@ -129,6 +131,7 @@ fn parse(path: &Path, len: u64, scanner: &Scanner, previous: Transcript) -> Tran
     found.running = found.running.or(previous.running);
     found.progress = found.progress.or(previous.progress);
     found.title = found.title.or(previous.title);
+    found.ai_title = found.ai_title.or(previous.ai_title);
     found.cwd = found.cwd.or(previous.cwd);
     found.background |= previous.background;
     let missing = found.last_prompt.is_none() || (scanner.tracks_turns && found.running.is_none());
@@ -156,7 +159,7 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_prompt = line.contains("\"user\""); // 工具回傳也是 user 訊息
         let maybe_todos = line.contains("TodoWrite");
         let maybe_ask = ASKING_TOOLS.iter().any(|tool| line.contains(tool));
-        let maybe_title = line.contains("customTitle");
+        let maybe_title = line.contains("customTitle") || line.contains("aiTitle");
         if !maybe_prompt && !maybe_todos && !maybe_ask && !maybe_title {
             continue;
         }
@@ -168,6 +171,9 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
             .filter(|title| !title.is_empty())
         {
             found.title = Some(title.to_string());
+        }
+        if let Some(title) = entry["aiTitle"].as_str().filter(|title| !title.is_empty()) {
+            found.ai_title = Some(title.to_string());
         }
         if let Some(cwd) = entry["cwd"].as_str() {
             found.cwd = Some(cwd.to_string());

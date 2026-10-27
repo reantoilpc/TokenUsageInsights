@@ -66,7 +66,7 @@ function renderCard(session) {
   card.dataset.key = `${session.agent}:${session.id}`;
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
-  card.title = '跳到這個 session 的 Ghostty 分頁';
+  card.title = '跳到這個 session 的終端機分頁';
   card.addEventListener('click', () => focusSession(session));
   card.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -100,7 +100,7 @@ async function resumeSession(item) {
   resuming.add(item.id);
   document.querySelector(`[data-key="resume:${CSS.escape(item.id)}"]`)?.setAttribute('disabled', '');
   const result = await post('/api/live/resume', item);
-  notify(result.ok ? '已在 Ghostty 開啟接續的分頁' : result.message);
+  notify(result.ok ? '已開啟接續的分頁' : result.message);
   setTimeout(() => resuming.delete(item.id), 5000);
 }
 

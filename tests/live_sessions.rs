@@ -466,6 +466,47 @@ async fn open_claude_sessions_are_listed_with_name_folder_and_status() {
 }
 
 #[tokio::test]
+async fn an_unrenamed_session_is_named_after_the_title_claude_shows_on_its_tab() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered("s-1", "/work/erp", "idle", 1000);
+    session["name"] = json!("erp-3f");
+    session["nameSource"] = json!("derived");
+    server.claude_session(pid, session);
+    server.transcript(
+        "-work-erp",
+        "s-1",
+        &[json!({"type":"ai-title","aiTitle":"修正訂單匯出","sessionId":"s-1"})],
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["name"], "修正訂單匯出");
+}
+
+#[tokio::test]
+async fn a_chosen_name_wins_over_ai_titles_recorded_after_it() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered("s-1", "/work/erp", "idle", 1000);
+    session["name"] = json!("訂單匯出");
+    session["nameSource"] = json!("user");
+    server.claude_session(pid, session);
+    server.transcript(
+        "-work-erp",
+        "s-1",
+        &[
+            json!({"type":"custom-title","customTitle":"訂單匯出","sessionId":"s-1"}),
+            json!({"type":"ai-title","aiTitle":"修正訂單匯出","sessionId":"s-1"}),
+        ],
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["name"], "訂單匯出");
+}
+
+#[tokio::test]
 async fn a_registry_entry_whose_process_is_gone_is_not_live() {
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
     let alive = server.alive_pid();
@@ -888,8 +929,124 @@ async fn without_ghostty_the_answer_is_a_clear_unsupported_message() {
         .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
         .await;
 
+    // 測試的 PATH 裡也沒有 powershell.exe，所以 Windows Terminal 同樣不能用
     assert_eq!(status, 501);
-    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty"));
+    assert!(message.contains("Windows Terminal"));
+}
+
+/// 沒有 Ghostty（osascript 失敗），改由 Windows Terminal 提供分頁：`titles` 是第一個視窗裡
+/// 依序的分頁標題，假的 powershell.exe 以 Windows 的換行輸出。
+async fn server_on_windows_terminal(titles: &[&str]) -> LiveServer {
+    let server = server_with_named_session().await;
+    server.fake.failing("osascript");
+    let listing: String = titles.iter().map(|title| format!("{title}\r\n")).collect();
+    server.fake.script("powershell.exe", &listing);
+    server.fake.script("wt.exe", "");
+    server
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_card_with_no_matching_tab_is_reported_and_nothing_is_switched() {
+    let server = server_on_windows_terminal(&["Windows PowerShell", "✳ 別的工作"]).await;
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert_eq!(body["message"], "找不到這個 session 的分頁");
+    assert!(server.fake.calls("wt.exe").is_empty());
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_card_switches_to_the_tab_titled_with_the_session_name() {
+    let server =
+        server_on_windows_terminal(&["Windows PowerShell", "✳ 別的工作", "◐ 芒果許"]).await;
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["focused"], true);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "2"]]
+    );
+}
+
+/// 假的 powershell.exe 依序收到的腳本：解開 `-EncodedCommand` 的 UTF-16LE base64。
+fn powershell_scripts(server: &LiveServer) -> Vec<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    server
+        .fake
+        .calls("powershell.exe")
+        .iter()
+        .map(|args| {
+            let at = args
+                .iter()
+                .position(|arg| arg == "-EncodedCommand")
+                .unwrap();
+            let bytes = STANDARD.decode(&args[at + 1]).unwrap();
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).unwrap()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn on_windows_terminal_switching_also_brings_the_window_to_the_front() {
+    let server = server_on_windows_terminal(&["Windows PowerShell", "◐ 芒果許"]).await;
+
+    server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    let scripts = powershell_scripts(&server);
+    assert_eq!(scripts.len(), 2, "一次列出分頁、一次把視窗帶到前景");
+    assert!(scripts[1].contains("SetForegroundWindow"));
+}
+
+#[tokio::test]
+async fn on_windows_terminal_the_name_must_be_the_whole_title_after_the_status_symbol() {
+    // 沒有資料夾可比對，只看結尾會把「芒果許」對到「大芒果許」或 Codex 的「x | 芒果許」
+    let server = server_on_windows_terminal(&["◐ 大芒果許", "x | 芒果許", "✳ 芒果許"]).await;
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "2"]]
+    );
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_session_without_a_name_cannot_be_matched_to_a_tab() {
+    // Windows Terminal 不提供分頁的工作資料夾，沒有名稱就無從比對
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    server.fake.failing("osascript");
+    server
+        .fake
+        .script("powershell.exe", "Windows PowerShell\r\n✳ 別的工作\r\n");
+    server.fake.script("wt.exe", "");
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert_eq!(body["message"], "找不到這個 session 的分頁");
+    assert!(server.fake.calls("wt.exe").is_empty());
 }
 
 #[tokio::test]
@@ -1483,6 +1640,30 @@ async fn clicking_a_codex_card_looks_for_a_tab_in_that_folder_that_starts_with_t
 }
 
 #[tokio::test]
+async fn on_windows_terminal_a_codex_card_switches_to_the_tab_that_starts_with_the_name() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/mango-hsu", Some("比較"), 1000, "user", "done");
+    server.processes(&[(101, "ttys003", "codex", "/work/mango-hsu")]);
+    server.fake.failing("osascript");
+    // 「比較模式」以「比較」開頭，但名稱後面沒接分隔符號，不算符合
+    server.fake.script(
+        "powershell.exe",
+        "比較模式 | mango-hsu\r\n比較 | mango-hsu\r\n",
+    );
+    server.fake.script("wt.exe", "");
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "1"]]
+    );
+}
+
+#[tokio::test]
 async fn a_codex_card_that_is_not_open_cannot_be_focused() {
     let server = LiveServer::start(Some("127.0.0.1")).await;
     server.codex_thread(T1, "/work/erp", Some("已經關掉的"), 1000, "user", "done");
@@ -1900,8 +2081,84 @@ async fn without_ghostty_resume_answers_with_a_clear_unsupported_message() {
         .post_json(RESUME, json!({"agent":"claude","id":U1}))
         .await;
 
+    // 測試的 PATH 裡也沒有 wt.exe，所以 Windows Terminal 同樣不能用
     assert_eq!(status, 501);
-    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty"));
+    assert!(message.contains("Windows Terminal"));
+}
+
+/// 一個已經結束的 Claude Code session，且沒有 Ghostty、改由 Windows Terminal 開分頁。
+async fn ended_claude_session_on_windows_terminal(cwd: &str) -> LiveServer {
+    let server = server_with_an_ended_claude_session(cwd).await;
+    server.fake.failing("osascript");
+    server.fake.script("wt.exe", "");
+    server
+}
+
+#[tokio::test]
+async fn on_windows_terminal_resuming_opens_a_tab_in_the_original_folder_running_only_the_fixed_command(
+) {
+    let server = ended_claude_session_on_windows_terminal("/work/my erp").await;
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!((status, &body["resumed"]), (200, &json!(true)));
+    // 資料夾是 wsl.exe 的一個參數、不進指令文字；agent 結束後 exec bash 留下一般的 shell
+    let command = format!("claude --resume {U1} || true && exec bash");
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [[
+            "-w",
+            "0",
+            "new-tab",
+            "wsl.exe",
+            "--cd",
+            "/work/my erp",
+            "--",
+            "bash",
+            "-lic",
+            command.as_str()
+        ]]
+    );
+}
+
+#[tokio::test]
+async fn without_any_terminal_a_risky_folder_name_gets_the_plain_unsupported_message() {
+    // 例如 macOS 上 Ghostty 開不了：沒有 wt.exe，就不該回 Windows Terminal 專用的資料夾錯誤
+    let server = server_with_an_ended_claude_session("/work/erp; x").await;
+    server.fake.failing("osascript");
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!(status, 501);
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty") && message.contains("Windows Terminal"));
+    assert!(!message.contains("資料夾"));
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_folder_name_that_could_smuggle_a_command_is_refused() {
+    // wt.exe 把 ; 當成下一個 wt 指令的開頭（資料夾名稱就能夾帶任意指令）；
+    // " 與 \ 會破壞 Windows 命令列的引號處理
+    for cwd in ["/work/erp; new-tab calc", "/work/erp\" calc", "/work/erp\\"] {
+        let server = ended_claude_session_on_windows_terminal(cwd).await;
+
+        let (status, body) = server
+            .post_json(RESUME, json!({"agent":"claude","id":U1}))
+            .await;
+
+        assert_eq!(status, 501, "{cwd}");
+        assert!(
+            body["message"].as_str().unwrap().contains("資料夾"),
+            "{cwd}"
+        );
+        assert!(server.fake.calls("wt.exe").is_empty(), "{cwd}");
+    }
 }
 
 #[tokio::test]

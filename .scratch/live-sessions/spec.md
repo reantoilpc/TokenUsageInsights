@@ -4,7 +4,7 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-我同時在 Ghostty 開著好幾個 Claude Code 和 Codex CLI session，各自跑很久。時間一長就忘記每個 session 做到哪、哪一個正在等我回覆、該先回哪一個，要回去時還得在一堆分頁裡一個個找。已經關掉的 session 想接著做，也得自己去翻對話 id、切到原資料夾再手打指令。
+我同時在終端機（Mac 上的 Ghostty、Windows 上的 Windows Terminal）開著好幾個 Claude Code 和 Codex CLI session，各自跑很久。時間一長就忘記每個 session 做到哪、哪一個正在等我回覆、該先回哪一個，要回去時還得在一堆分頁裡一個個找。已經關掉的 session 想接著做，也得自己去翻對話 id、切到原資料夾再手打指令。
 
 Token 戰情室目前只回答「過去花了多少 token」，沒有「現在每個 agent 在做什麼」這個視角。
 
@@ -22,9 +22,9 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 待辦進度（幾項做完、目前在做哪一項）
 - 我多久以前下的指令（只顯示這一個時間，靠右放在卡片最後一行）
 
-點一張卡片，直接跳到那個 session 所在的 Ghostty 分頁。
+點一張卡片，直接跳到那個 session 所在的終端機分頁（macOS 的 Ghostty，或 Windows 上 WSL 的 Windows Terminal）。
 
-頁面下半部是「最近結束」：24 小時內結束的 session（最多 10 筆），每張有「接續」按鈕，按下去會在 Ghostty 開新分頁、切到原資料夾、自動執行 `claude --resume <id>` 或 `codex resume <id>`。
+頁面下半部是「最近結束」：24 小時內結束的 session（最多 10 筆），每張有「接續」按鈕，按下去會在終端機開新分頁、切到原資料夾、自動執行 `claude --resume <id>` 或 `codex resume <id>`。
 
 整個功能只讀取本機既有的對話紀錄與 session 清單，不改 Claude Code 或 Codex 的任何設定、不裝 hook、不呼叫任何 AI 服務。網站預設只接受本機連線。
 
@@ -67,7 +67,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 ### 跳回去
 
-27. 身為開發者，我想點一張卡片就跳到那個 session 所在的 Ghostty 分頁，以便馬上回去處理。
+27. 身為開發者，我想點一張卡片就跳到那個 session 所在的終端機分頁（Ghostty 或 Windows Terminal），以便馬上回去處理。
 28. 身為開發者，我想在找不到對應分頁時看到「找不到這個 session 的分頁」，而不是系統默默開一個新的。
 29. 身為開發者，我想在同一資料夾有好幾個分頁符合時，系統跳到第一個，而不是報錯。
 30. 身為開發者，我想讓系統在跳轉時比對「資料夾 ＋ 分頁標題」：Claude Code 的分頁標題結尾是 session 名稱，Codex 的分頁標題開頭是對話名稱。
@@ -77,7 +77,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 32. 身為開發者，我想在頁面下方看到 24 小時內結束的 session（最多 10 筆、最新的在前），以便接著做。
 33. 身為開發者，我想在每一筆看到名稱、資料夾、我最後的指令與結束時間。
-34. 身為開發者，我想按「接續」後，系統在 Ghostty 開新分頁、切到原資料夾、自動執行 `claude --resume <id>` 或 `codex resume <id>`。
+34. 身為開發者，我想按「接續」後，系統在終端機（Ghostty 或 Windows Terminal）開新分頁、切到原資料夾、自動執行 `claude --resume <id>` 或 `codex resume <id>`。
 35. 身為開發者，我想讓接續開出來的分頁在 agent 結束後仍留著一般的 shell，不會直接關掉。
 36. 身為開發者，我想在按接續時不用再多一次確認視窗，因為安全性已經由系統保證。
 37. 身為開發者，我不想對還開著的 session 提供「接續」，因為兩個程式同時寫同一份對話紀錄會出問題。
@@ -98,7 +98,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 ### 範圍與定位
 
-- 只給自己用：只支援 macOS 與 Ghostty，介面只做繁體中文，不做其他語言，也不更新 README 與 CHANGELOG。
+- 只給自己用：支援 macOS 的 Ghostty，以及 Windows 上以 WSL 執行時的 Windows Terminal；介面只做繁體中文，不做其他語言，也不更新 README 與 CHANGELOG。
 - 不送任何東西回原作者。`upstream` 只用來拉更新。
 - 第一版不做 Haiku 摘要（目標／階段／下一步）；留到第二版。
 - 即時狀態不存進資料庫，每次請求即時讀取、即時回傳。
@@ -109,6 +109,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 還開著的 session 清單來自 Claude Code 自己維護的 session 登記資料夾：每個執行中的 Claude Code 一個 JSON 檔，含程序 id、session id、資料夾、名稱、狀態（busy／idle／shell）、更新時間。該資料夾尊重 `CLAUDE_DIR` 覆寫。
 - 該資料夾內的 `.key` 檔是機密，任何情況都不得開啟、讀取或列出內容。
 - 每筆都要再確認程序還活著；已死掉的登記檔視為已結束，不顯示在「進行中」。
+- 名稱與分頁標題一致：對話紀錄的 custom-title（自己取的名字）優先，沒有就用 ai-title（Claude Code 自動產生的標題），都沒有才用登記檔的 name。沒取名時，登記檔的 name 是「資料夾-代號」形式的自動代號（nameSource 為 derived），對不上分頁標題。兩種標題紀錄會反覆寫入且彼此交錯，所以不能取「最後一筆標題」。
 - 狀態對應：busy 與 shell 顯示「工作中」，idle 顯示「閒置」；若對話紀錄顯示有 AskUserQuestion 或 ExitPlanMode 的呼叫還沒有收到對應結果，則顯示「等你回覆」，且優先於登記檔的狀態。
 - 對話紀錄位置：專案資料夾下以「工作資料夾路徑中非英數字元換成連字號」命名的子資料夾，檔名為 session id。
 
@@ -142,7 +143,11 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - Claude Code：資料夾相同，且標題以 session 名稱結尾（標題前面有狀態符號）；session 沒有名稱時只比對資料夾。
 - Codex：資料夾相同，且標題開頭是對話名稱（標題格式為「對話名稱 | 資料夾名稱」）。
 - 多個符合就取第一個；沒有符合就回傳「找不到」，**不得**自動接續或開新分頁。
-- 非 macOS 或 Ghostty 未執行時，回傳明確的「不支援」或「找不到」訊息，不報內部錯誤。
+- Ghostty 回報不支援（沒有 osascript，或 osascript 執行失敗）時，改試 Windows Terminal；不偵測作業系統，macOS 的行為不變。
+- Windows Terminal：以 powershell.exe 執行 UI Automation 腳本（`-EncodedCommand`），列出第一個視窗的分頁標題；找到後執行 `wt.exe -w 0 focus-tab -t <序號>`，再把視窗帶到最前面（先送一個 Alt 鍵事件，否則 Windows 不讓背景程式搶前景）。
+  - Windows Terminal 不提供分頁的工作資料夾，只能比對標題，所以規則比 Ghostty 嚴格：Claude Code 的標題在狀態符號之後必須剛好是 session 名稱（「fix」不能對到「◐ hotfix」，也不能對到 Codex 分頁「x | fix」）；Codex 同樣要求「對話名稱 | 」開頭。沒有名稱的 session 回傳「找不到」。
+  - 只看第一個視窗（UI Automation 依疊放順序列出）。
+- 兩種終端機都不能用、或找到分頁但 `wt.exe` 執行失敗時，回傳明確的「不支援」訊息；終端機沒開時回傳「找不到」，不報內部錯誤。
 
 ### 接續
 
@@ -150,6 +155,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 輸入文字只允許兩種固定形式：`claude --resume <id>`、`codex resume <id>`。
 - 請求只帶「哪個 agent」與「id」；資料夾由伺服器依 id 自己查，絕不接受請求端傳來的資料夾或指令文字。id 必須先通過格式檢查（UUID），且必須是看板目前清單上已知的 session。
 - 對「進行中」的 session 不提供接續。
+- Ghostty 開不了時改用 Windows Terminal：`wt.exe -w 0 new-tab wsl.exe --cd <資料夾> -- bash -lic "<接續指令> || true && exec bash"`。資料夾是 wsl.exe 的參數、不進指令文字；以 `|| true &&` 串接而不用 `;`，因為 wt.exe 會把 `;` 當成下一個 wt 指令的開頭。資料夾名稱含有 `;`、`"` 或 `\` 時拒絕：`;` 等於能夾帶任意 wt 指令，`"` 與 `\` 會破壞 Windows 命令列的引號處理。只有 PATH 裡找得到 wt.exe 時才做這項檢查；沒有 wt.exe（例如 macOS 上 Ghostty 開不了）時回一般的「不支援」訊息。
 
 ### HTTP 介面
 
@@ -180,7 +186,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 - **好測試的標準**：只測外部可觀察的行為，不測內部實作細節。
 - **唯一的接縫**：新功能的 HTTP API，對真正編好的程式測試。沿用既有整合測試的做法：啟動程式、指到暫存資料夾（`INSIGHTS_DIR`、`CLAUDE_DIR`、`CODEX_DIR`）、寫入假的對話紀錄檔與 session 登記檔、以 HTTP 呼叫並檢查回傳 JSON。
-- **假的系統指令**：把假的 `ps`、`lsof`、`osascript` 小腳本放在 PATH 最前面（預設都回報「沒有」，測試才不會碰到這台電腦真正的程序與 Ghostty）。腳本依劇本回答「哪些程序在跑」，並把收到的參數記錄成檔案，讓測試斷言「會對 Ghostty 下什麼指令」。不得為了測試在正式程式碼加專用開關。Claude Code 的存活判斷同樣要能在測試裡被控制（例如以假指令，或以測試程序自己的 pid 當作活著、以已結束的 pid 當作已死）。
+- **假的系統指令**：把假的 `ps`、`lsof`、`osascript`（Windows Terminal 的測試另加 `powershell.exe`、`wt.exe`）小腳本放在 PATH 最前面（預設都回報「沒有」，測試才不會碰到這台電腦真正的程序與 Ghostty）。腳本依劇本回答「哪些程序在跑」，並把收到的參數記錄成檔案，讓測試斷言「會對 Ghostty 下什麼指令」。不得為了測試在正式程式碼加專用開關。Claude Code 的存活判斷同樣要能在測試裡被控制（例如以假指令，或以測試程序自己的 pid 當作活著、以已結束的 pid 當作已死）。
 - **Codex 狀態資料庫**：測試以暫存的假資料庫提供，內容含對話的資料夾、名稱、紀錄檔位置、來源類型、更新時間。
 - **要涵蓋的行為**：
   - Claude 與 Codex 各自「還開著／已死」的判斷，包含同資料夾多個 Codex 的對應
@@ -192,7 +198,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
   - 接續：產生的指令只有兩種固定形式；未知 id、格式錯誤的 id、進行中的 session 一律拒絕；請求帶了自訂資料夾或指令時被忽略或拒絕
   - 安全：來源不符、缺少來源、內容類型不是 JSON 的 POST 被拒絕；預設綁定位址為本機
 - **既有範例**：`tests/additional_sources.rs`（TestServer、寫假的 jsonl、reqwest 呼叫）。
-- **不放進自動測試**：頁面外觀（以截圖手動確認）與實際的 Ghostty 跳轉（假腳本只能驗證會下什麼指令，真正跳過去要手動試一次）。
+- **不放進自動測試**：頁面外觀（以截圖手動確認）與實際的 Ghostty／Windows Terminal 跳轉（假腳本只能驗證會下什麼指令，真正跳過去、視窗帶到前景要手動試一次）。讀分頁的腳本各留一個預設忽略、要在真實終端機裡才能跑的測試：`cargo test -- --ignored real_ghostty`、`cargo test -- --ignored real_windows_terminal`。
 - 解析邏輯先不另外加單元測試層；若實作時發現某個邊界情況透過 HTTP 接縫太難測，再補。
 
 ## Out of Scope
@@ -202,7 +208,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 偵測 Claude Code 與 Codex 的權限確認框：兩邊都無法從紀錄可靠判斷，也不做「工具呼叫太久就猜在等你」的猜測。
 - Cursor、GitHub Copilot、Grok 等其他工具的即時狀態。
 - Codex 在 VS Code 擴充套件與桌面版裡的對話，以及 Codex 的子 agent 對話。
-- Windows 與 Linux、Ghostty 以外的終端機。
+- Linux，以及 Ghostty 與 Windows Terminal 以外的終端機；同時開多個 Windows Terminal 視窗；Windows Terminal 上依分頁標題區分同資料夾的多個 Codex（仍只有 Ghostty 支援）。
 - 多語系介面、README 與 CHANGELOG 更新、發版。
 - 鍵盤快捷鍵（1–9 跳轉）、桌面通知。
 - 把即時狀態存進資料庫、歷史分析。
@@ -217,5 +223,6 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - **上游同步**：本規格寫於上游 v1.5.0（2026-10-23）之上。新功能需要碰既有檔案的地方只有三處：路由註冊、首頁的連結、預設綁定位址。
 - **風險**：`GET /api/live` 與兩個 POST 都要求 Host 是本機位址，所以即使用 `HOST` 把網站改綁到非本機位址，也只能用 localhost 或 127.0.0.1 這類名稱連進來讀取；區網用法不在這次範圍。
 - **AppleScript 的坑**：在 Ghostty 的 `tell` 區塊裡，`tab` 指的是它的 tab 類別，會被轉成「tab」這個字而不是定位字元；分隔符號要在區塊外先定義。假的 osascript 測不出這種問題，所以保留一個要真的 Ghostty 才能跑的測試：`cargo test -- --ignored real_ghostty`。
-- **程式碼審查**：`/mattpocock-skills:code-review` 的發現已處理，細節見 commit 訊息；刻意不做的是把 agent 與 status 改成 enum（目前只有兩種 agent，之後有第三種再做）。
+- **程式碼審查**：`/mattpocock-skills:code-review` 的發現已處理，細節見 commit 訊息；刻意不做的是把 agent 與 status 改成 enum（目前只有兩種 agent，之後有第三種再做）。Windows Terminal 那一輪（Standards 8 項、Spec 5 項）全部處理：兩個行為問題見 commit c84c7d2，結構與註解見 e8f2815，規格文字見本檔。
+- **終端機的程式結構**：`terminal` 模組放兩種終端機共用的型別與「先 Ghostty、再 Windows Terminal」的切換順序；`ghostty`、`windows_terminal` 各自只處理自己那一種。
 - **工作單拆分建議**：先做 Claude Code 的清單與卡片（含跳轉），再加 Codex，最後做「最近結束」與接續，每一段都能獨立驗證。
