@@ -81,6 +81,15 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> Option<LiveSe
         updated_at: registered.updated_at.unwrap_or(0),
         last_prompt,
         prompt_at,
+        // recap 是我離開時寫的；之後我又下了指令，它描述的就是舊狀態，不顯示
+        recap: transcript
+            .recap
+            .filter(|recap| match (recap.at, prompt_at) {
+                (Some(recap_at), Some(prompt_at)) => recap_at > prompt_at,
+                (Some(_), None) => true,
+                (None, _) => false,
+            })
+            .map(|recap| recap.text),
         progress: transcript.progress,
     })
 }

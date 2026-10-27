@@ -111,6 +111,17 @@
   color: var(--text-secondary);
 }
 
+.live-card-recap {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .live-card-time {
   flex: none;
   color: var(--text-muted);

@@ -616,6 +616,59 @@ async fn card_carries_the_last_thing_the_person_typed_and_when() {
     assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
 }
 
+/// Claude Code 在使用者離開一陣子後寫進紀錄的 recap（away_summary）。
+fn recap(text: &str, timestamp: &str) -> Value {
+    json!({"type":"system","subtype":"away_summary","content":text,"timestamp":timestamp,"isMeta":false,"cwd":"/work/erp","sessionId":"s-1"})
+}
+
+#[tokio::test]
+async fn card_carries_the_recap_written_after_the_last_instruction() {
+    let server = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        reply("2026-10-23T08:00:09.000Z"),
+        recap("登入頁已修好，下一步是補測試。", "2026-10-23T09:00:00.000Z"),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["recap"], "登入頁已修好，下一步是補測試。");
+}
+
+#[tokio::test]
+async fn the_latest_recap_wins_and_a_session_without_one_has_none() {
+    let with_recaps = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        recap("第一次離開時的進度。", "2026-10-23T09:00:00.000Z"),
+        recap("第二次離開時的進度。", "2026-10-23T10:00:00.000Z"),
+    ])
+    .await;
+    let without = server_with_transcript(&[typed("你好", "2026-10-23T08:00:00.000Z")]).await;
+
+    assert_eq!(
+        with_recaps.live().await["live"][0]["recap"],
+        "第二次離開時的進度。"
+    );
+    assert_eq!(without.live().await["live"][0]["recap"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_recap_older_than_the_last_instruction_is_not_shown() {
+    // 離開時寫的 recap，之後我又下了新指令：它描述的是舊狀態，不能掛在卡片上
+    let server = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        recap("登入頁已修好，下一步是補測試。", "2026-10-23T09:00:00.000Z"),
+        typed("先不要補測試，改修註冊頁", "2026-10-23T10:00:00.000Z"),
+        reply("2026-10-23T10:00:09.000Z"),
+    ])
+    .await;
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "先不要補測試，改修註冊頁");
+    assert_eq!(live["live"][0]["recap"], Value::Null);
+}
+
 #[tokio::test]
 async fn only_what_the_person_typed_counts_as_an_instruction() {
     let tool_result = json!({"type":"user","timestamp":"2026-10-23T08:01:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}});
