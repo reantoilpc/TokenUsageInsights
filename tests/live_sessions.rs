@@ -466,6 +466,47 @@ async fn open_claude_sessions_are_listed_with_name_folder_and_status() {
 }
 
 #[tokio::test]
+async fn an_unrenamed_session_is_named_after_the_title_claude_shows_on_its_tab() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered("s-1", "/work/erp", "idle", 1000);
+    session["name"] = json!("erp-3f");
+    session["nameSource"] = json!("derived");
+    server.claude_session(pid, session);
+    server.transcript(
+        "-work-erp",
+        "s-1",
+        &[json!({"type":"ai-title","aiTitle":"修正訂單匯出","sessionId":"s-1"})],
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["name"], "修正訂單匯出");
+}
+
+#[tokio::test]
+async fn a_chosen_name_wins_over_ai_titles_recorded_after_it() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered("s-1", "/work/erp", "idle", 1000);
+    session["name"] = json!("訂單匯出");
+    session["nameSource"] = json!("user");
+    server.claude_session(pid, session);
+    server.transcript(
+        "-work-erp",
+        "s-1",
+        &[
+            json!({"type":"custom-title","customTitle":"訂單匯出","sessionId":"s-1"}),
+            json!({"type":"ai-title","aiTitle":"修正訂單匯出","sessionId":"s-1"}),
+        ],
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["name"], "訂單匯出");
+}
+
+#[tokio::test]
 async fn a_registry_entry_whose_process_is_gone_is_not_live() {
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
     let alive = server.alive_pid();

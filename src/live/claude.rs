@@ -66,7 +66,12 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> Option<LiveSe
         cwd: registered.cwd,
         agent: "claude",
         id: registered.session_id,
-        name: registered.name.filter(|name| !name.is_empty()),
+        // 分頁標題顯示的名稱：自己取的名字優先，沒取名就是 Claude Code 自動產生的標題；
+        // 登記檔的 name 在沒取名時是「資料夾-代號」，對不上分頁標題，只當最後的備案
+        name: transcript
+            .title
+            .or(transcript.ai_title)
+            .or(registered.name.filter(|name| !name.is_empty())),
         // ponytail: 登記檔只有 busy／idle／shell，shell 視為工作中；其餘一律當閒置
         status: match registered.status.as_deref() {
             _ if transcript.asking => "waiting", // 正在等我回答，優先於登記檔的狀態
