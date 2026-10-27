@@ -4,6 +4,7 @@
 mod claude;
 mod codex;
 mod ghostty;
+mod terminal;
 mod transcript;
 mod windows_terminal;
 
@@ -164,24 +165,18 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         return failure(StatusCode::FORBIDDEN, "請求來源不符");
     }
     let outcome = tokio::task::spawn_blocking(move || {
-        let session = find_session(&request)?;
-        let name = session.name.as_deref().unwrap_or("");
-        let how = ghostty::TitleMatch::of(session.agent);
-        Some(match ghostty::focus(&session.cwd, name, how) {
-            ghostty::Focus::Unsupported => windows_terminal::focus(name, how),
-            outcome => outcome,
-        })
+        find_session(&request).map(|session| terminal::focus(&session))
     })
     .await
     .ok()
     .flatten();
     match outcome {
         None => failure(StatusCode::NOT_FOUND, "找不到這個 session"),
-        Some(ghostty::Focus::Done) => Json(json!({ "focused": true })).into_response(),
-        Some(ghostty::Focus::Missing) => {
+        Some(terminal::Focus::Done) => Json(json!({ "focused": true })).into_response(),
+        Some(terminal::Focus::Missing) => {
             failure(StatusCode::NOT_FOUND, "找不到這個 session 的分頁")
         }
-        Some(ghostty::Focus::Unsupported) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
+        Some(terminal::Focus::Unsupported) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
     }
 }
 
@@ -228,17 +223,16 @@ pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) ->
             .into_iter()
             .find(|item| item.agent == request.agent && item.id == request.id)
             .ok_or((StatusCode::NOT_FOUND, "找不到這個已結束的 session"))?;
-        let command = ended.resume_command();
-        if ghostty::open_tab(&ended.cwd, &format!("{command}\n")) {
-            return Ok(true);
-        }
-        windows_terminal::open_tab(&ended.cwd, &command)
-            .map_err(|message| (StatusCode::NOT_IMPLEMENTED, message))
+        Ok(terminal::open_tab(&ended.cwd, &ended.resume_command()))
     })
     .await;
     match outcome {
-        Ok(Ok(true)) => Json(json!({ "resumed": true })).into_response(),
-        Ok(Ok(false)) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
+        Ok(Ok(terminal::Open::Done)) => Json(json!({ "resumed": true })).into_response(),
+        Ok(Ok(terminal::Open::Unsupported)) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
+        Ok(Ok(terminal::Open::UnsafeFolder)) => failure(
+            StatusCode::NOT_IMPLEMENTED,
+            "資料夾名稱含有 ; \" 或 \\，無法安全地在 Windows Terminal 開啟",
+        ),
         Ok(Err((status, message))) => failure(status, message),
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "內部錯誤"),
     }

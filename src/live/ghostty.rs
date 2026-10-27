@@ -1,42 +1,7 @@
 //! 透過 Ghostty 的 AppleScript 介面操作分頁（僅 macOS）。
 
+use super::terminal::{Focus, TitleMatch};
 use std::process::Command;
-
-pub enum Focus {
-    Done,
-    /// 找不到符合的分頁。
-    Missing,
-    /// 沒有 osascript 或 Ghostty（例如不是 macOS）。
-    Unsupported,
-}
-
-/// 標題與名稱的比對方式：Claude Code 的標題是「狀態符號 名稱」，Codex 是「名稱 | 資料夾」。
-#[derive(Clone, Copy)]
-pub enum TitleMatch {
-    EndsWith,
-    StartsWith,
-}
-
-impl TitleMatch {
-    pub fn of(agent: &str) -> Self {
-        if agent == "codex" {
-            Self::StartsWith
-        } else {
-            Self::EndsWith
-        }
-    }
-
-    /// 分頁標題是否屬於這個名稱，給不在 AppleScript 裡比對的終端機用。這些終端機沒有資料夾
-    /// 可比對，所以比 FOCUS_SCRIPT 嚴格：Claude 的標題在狀態符號之後必須剛好是名稱。
-    pub fn matches(self, title: &str, name: &str) -> bool {
-        match self {
-            Self::EndsWith => title
-                .split_once(' ')
-                .is_some_and(|(_, after_symbol)| after_symbol == name),
-            Self::StartsWith => title.starts_with(&format!("{name} | ")),
-        }
-    }
-}
 
 pub struct Tab {
     pub cwd: String,
