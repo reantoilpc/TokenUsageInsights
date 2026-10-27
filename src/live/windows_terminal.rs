@@ -90,10 +90,19 @@ pub fn focus(name: &str, how: TitleMatch) -> Focus {
     Focus::Done
 }
 
+/// PATH 裡有 wt.exe（WSL 預設把 Windows 的 PATH 接在後面）。
+fn has_wt_exe() -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("wt.exe").is_file()))
+}
+
 /// 在第一個視窗開新分頁，以 wsl.exe 切到資料夾後執行 `command`，agent 結束後留下一般的
 /// shell。資料夾是 wsl.exe 的參數、不進指令文字；以 || 與 && 串接而不用 ;，因為 wt.exe
 /// 會把 ; 當成下一個 wt 指令的開頭。沒有 wt.exe（不是 WSL）時回傳 Ok(false)。
 pub fn open_tab(cwd: &str, command: &str) -> Result<bool, &'static str> {
+    if !has_wt_exe() {
+        return Ok(false);
+    }
     // ; 會讓 wt.exe 把資料夾名稱後半段當成另一個 wt 指令執行；" 與 \ 會破壞命令列的引號
     if cwd.contains([';', '"', '\\']) {
         return Err("資料夾名稱含有 ; \" 或 \\，無法安全地在 Windows Terminal 開啟");

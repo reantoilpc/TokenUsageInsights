@@ -1013,6 +1013,22 @@ async fn on_windows_terminal_switching_also_brings_the_window_to_the_front() {
 }
 
 #[tokio::test]
+async fn on_windows_terminal_the_name_must_be_the_whole_title_after_the_status_symbol() {
+    // 沒有資料夾可比對，只看結尾會把「芒果許」對到「大芒果許」或 Codex 的「x | 芒果許」
+    let server = server_on_windows_terminal(&["◐ 大芒果許", "x | 芒果許", "✳ 芒果許"]).await;
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "2"]]
+    );
+}
+
+#[tokio::test]
 async fn on_windows_terminal_a_session_without_a_name_cannot_be_matched_to_a_tab() {
     // Windows Terminal 不提供分頁的工作資料夾，沒有名稱就無從比對
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
@@ -2107,6 +2123,22 @@ async fn on_windows_terminal_resuming_opens_a_tab_in_the_original_folder_running
             command.as_str()
         ]]
     );
+}
+
+#[tokio::test]
+async fn without_any_terminal_a_risky_folder_name_gets_the_plain_unsupported_message() {
+    // 例如 macOS 上 Ghostty 開不了：沒有 wt.exe，就不該回 Windows Terminal 專用的資料夾錯誤
+    let server = server_with_an_ended_claude_session("/work/erp; x").await;
+    server.fake.failing("osascript");
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!(status, 501);
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty") && message.contains("Windows Terminal"));
+    assert!(!message.contains("資料夾"));
 }
 
 #[tokio::test]
