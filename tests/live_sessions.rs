@@ -929,8 +929,108 @@ async fn without_ghostty_the_answer_is_a_clear_unsupported_message() {
         .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
         .await;
 
+    // 測試的 PATH 裡也沒有 powershell.exe，所以 Windows Terminal 同樣不能用
     assert_eq!(status, 501);
-    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty"));
+    assert!(message.contains("Windows Terminal"));
+}
+
+/// 沒有 Ghostty（osascript 失敗），改由 Windows Terminal 提供分頁：`titles` 是第一個視窗裡
+/// 依序的分頁標題，假的 powershell.exe 以 Windows 的換行輸出。
+async fn server_on_windows_terminal(titles: &[&str]) -> LiveServer {
+    let server = server_with_named_session().await;
+    server.fake.failing("osascript");
+    let listing: String = titles.iter().map(|title| format!("{title}\r\n")).collect();
+    server.fake.script("powershell.exe", &listing);
+    server.fake.script("wt.exe", "");
+    server
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_card_with_no_matching_tab_is_reported_and_nothing_is_switched() {
+    let server = server_on_windows_terminal(&["Windows PowerShell", "✳ 別的工作"]).await;
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert_eq!(body["message"], "找不到這個 session 的分頁");
+    assert!(server.fake.calls("wt.exe").is_empty());
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_card_switches_to_the_tab_titled_with_the_session_name() {
+    let server =
+        server_on_windows_terminal(&["Windows PowerShell", "✳ 別的工作", "◐ 芒果許"]).await;
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["focused"], true);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "2"]]
+    );
+}
+
+/// 假的 powershell.exe 依序收到的腳本：解開 `-EncodedCommand` 的 UTF-16LE base64。
+fn powershell_scripts(server: &LiveServer) -> Vec<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    server
+        .fake
+        .calls("powershell.exe")
+        .iter()
+        .map(|args| {
+            let at = args
+                .iter()
+                .position(|arg| arg == "-EncodedCommand")
+                .unwrap();
+            let bytes = STANDARD.decode(&args[at + 1]).unwrap();
+            let units: Vec<u16> = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&units).unwrap()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn on_windows_terminal_switching_also_brings_the_window_to_the_front() {
+    let server = server_on_windows_terminal(&["Windows PowerShell", "◐ 芒果許"]).await;
+
+    server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    let scripts = powershell_scripts(&server);
+    assert_eq!(scripts.len(), 2, "一次列出分頁、一次把視窗帶到前景");
+    assert!(scripts[1].contains("SetForegroundWindow"));
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_session_without_a_name_cannot_be_matched_to_a_tab() {
+    // Windows Terminal 不提供分頁的工作資料夾，沒有名稱就無從比對
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    server.fake.failing("osascript");
+    server
+        .fake
+        .script("powershell.exe", "Windows PowerShell\r\n✳ 別的工作\r\n");
+    server.fake.script("wt.exe", "");
+
+    let (status, body) = server
+        .post_json(FOCUS, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert_eq!(body["message"], "找不到這個 session 的分頁");
+    assert!(server.fake.calls("wt.exe").is_empty());
 }
 
 #[tokio::test]
@@ -1521,6 +1621,30 @@ async fn clicking_a_codex_card_looks_for_a_tab_in_that_folder_that_starts_with_t
     let calls = server.fake.calls("osascript");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0][2..], ["/work/mango-hsu", "比較模式", "starts"]);
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_codex_card_switches_to_the_tab_that_starts_with_the_name() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.codex_thread(T1, "/work/mango-hsu", Some("比較"), 1000, "user", "done");
+    server.processes(&[(101, "ttys003", "codex", "/work/mango-hsu")]);
+    server.fake.failing("osascript");
+    // 「比較模式」以「比較」開頭，但名稱後面沒接分隔符號，不算符合
+    server.fake.script(
+        "powershell.exe",
+        "比較模式 | mango-hsu\r\n比較 | mango-hsu\r\n",
+    );
+    server.fake.script("wt.exe", "");
+
+    let (status, _) = server
+        .post_json(FOCUS, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [["-w", "0", "focus-tab", "-t", "1"]]
+    );
 }
 
 #[tokio::test]

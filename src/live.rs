@@ -5,6 +5,7 @@ mod claude;
 mod codex;
 mod ghostty;
 mod transcript;
+mod windows_terminal;
 
 use axum::{
     http::{
@@ -162,11 +163,12 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
     }
     let outcome = tokio::task::spawn_blocking(move || {
         let session = find_session(&request)?;
-        Some(ghostty::focus(
-            &session.cwd,
-            session.name.as_deref().unwrap_or(""),
-            ghostty::TitleMatch::of(session.agent),
-        ))
+        let name = session.name.as_deref().unwrap_or("");
+        let how = ghostty::TitleMatch::of(session.agent);
+        Some(match ghostty::focus(&session.cwd, name, how) {
+            ghostty::Focus::Unsupported => windows_terminal::focus(name, how),
+            outcome => outcome,
+        })
     })
     .await
     .ok()
@@ -179,7 +181,7 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         }
         Some(ghostty::Focus::Unsupported) => failure(
             StatusCode::NOT_IMPLEMENTED,
-            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
+            "無法操作終端機（支援 macOS 的 Ghostty 與 Windows 的 Windows Terminal）",
         ),
     }
 }

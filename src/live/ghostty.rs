@@ -25,6 +25,14 @@ impl TitleMatch {
             Self::EndsWith
         }
     }
+
+    /// 分頁標題是否屬於這個名稱；規則與 FOCUS_SCRIPT 相同，給不在 AppleScript 裡比對的終端機用。
+    pub fn matches(self, title: &str, name: &str) -> bool {
+        match self {
+            Self::EndsWith => title.ends_with(name),
+            Self::StartsWith => title.starts_with(&format!("{name} | ")),
+        }
+    }
 }
 
 pub struct Tab {

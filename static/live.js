@@ -66,7 +66,7 @@ function renderCard(session) {
   card.dataset.key = `${session.agent}:${session.id}`;
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
-  card.title = '跳到這個 session 的 Ghostty 分頁';
+  card.title = '跳到這個 session 的終端機分頁';
   card.addEventListener('click', () => focusSession(session));
   card.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
