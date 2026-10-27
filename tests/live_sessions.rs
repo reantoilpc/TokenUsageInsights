@@ -2065,8 +2065,68 @@ async fn without_ghostty_resume_answers_with_a_clear_unsupported_message() {
         .post_json(RESUME, json!({"agent":"claude","id":U1}))
         .await;
 
+    // 測試的 PATH 裡也沒有 wt.exe，所以 Windows Terminal 同樣不能用
     assert_eq!(status, 501);
-    assert!(body["message"].as_str().unwrap().contains("Ghostty"));
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("Ghostty"));
+    assert!(message.contains("Windows Terminal"));
+}
+
+/// 一個已經結束的 Claude Code session，且沒有 Ghostty、改由 Windows Terminal 開分頁。
+async fn ended_claude_session_on_windows_terminal(cwd: &str) -> LiveServer {
+    let server = server_with_an_ended_claude_session(cwd).await;
+    server.fake.failing("osascript");
+    server.fake.script("wt.exe", "");
+    server
+}
+
+#[tokio::test]
+async fn on_windows_terminal_resuming_opens_a_tab_in_the_original_folder_running_only_the_fixed_command(
+) {
+    let server = ended_claude_session_on_windows_terminal("/work/my erp").await;
+
+    let (status, body) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U1}))
+        .await;
+
+    assert_eq!((status, &body["resumed"]), (200, &json!(true)));
+    // 資料夾是 wsl.exe 的一個參數、不進指令文字；agent 結束後 exec bash 留下一般的 shell
+    let command = format!("claude --resume {U1} || true && exec bash");
+    assert_eq!(
+        server.fake.calls("wt.exe"),
+        [[
+            "-w",
+            "0",
+            "new-tab",
+            "wsl.exe",
+            "--cd",
+            "/work/my erp",
+            "--",
+            "bash",
+            "-lic",
+            command.as_str()
+        ]]
+    );
+}
+
+#[tokio::test]
+async fn on_windows_terminal_a_folder_name_that_could_smuggle_a_command_is_refused() {
+    // wt.exe 把 ; 當成下一個 wt 指令的開頭（資料夾名稱就能夾帶任意指令）；
+    // " 與 \ 會破壞 Windows 命令列的引號處理
+    for cwd in ["/work/erp; new-tab calc", "/work/erp\" calc", "/work/erp\\"] {
+        let server = ended_claude_session_on_windows_terminal(cwd).await;
+
+        let (status, body) = server
+            .post_json(RESUME, json!({"agent":"claude","id":U1}))
+            .await;
+
+        assert_eq!(status, 501, "{cwd}");
+        assert!(
+            body["message"].as_str().unwrap().contains("資料夾"),
+            "{cwd}"
+        );
+        assert!(server.fake.calls("wt.exe").is_empty(), "{cwd}");
+    }
 }
 
 #[tokio::test]

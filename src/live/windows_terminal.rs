@@ -90,6 +90,23 @@ pub fn focus(name: &str, how: TitleMatch) -> Focus {
     Focus::Done
 }
 
+/// 在第一個視窗開新分頁，以 wsl.exe 切到資料夾後執行 `command`，agent 結束後留下一般的
+/// shell。資料夾是 wsl.exe 的參數、不進指令文字；以 || 與 && 串接而不用 ;，因為 wt.exe
+/// 會把 ; 當成下一個 wt 指令的開頭。沒有 wt.exe（不是 WSL）時回傳 Ok(false)。
+pub fn open_tab(cwd: &str, command: &str) -> Result<bool, &'static str> {
+    // ; 會讓 wt.exe 把資料夾名稱後半段當成另一個 wt 指令執行；" 與 \ 會破壞命令列的引號
+    if cwd.contains([';', '"', '\\']) {
+        return Err("資料夾名稱含有 ; \" 或 \\，無法安全地在 Windows Terminal 開啟");
+    }
+    Ok(Command::new("wt.exe")
+        .args([
+            "-w", "0", "new-tab", "wsl.exe", "--cd", cwd, "--", "bash", "-lic",
+        ])
+        .arg(format!("{command} || true && exec bash"))
+        .output()
+        .is_ok_and(|output| output.status.success()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

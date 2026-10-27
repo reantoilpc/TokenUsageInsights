@@ -127,6 +127,8 @@ fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "message": message }))).into_response()
 }
 
+const NO_TERMINAL: &str = "無法操作終端機（支援 macOS 的 Ghostty 與 Windows 的 Windows Terminal）";
+
 /// Host 必須是本機位址。只比對 Origin 與 Host 相等擋不住 DNS rebinding（攻擊者的網域
 /// 指到 127.0.0.1 時兩者會一致），所以 Host 本身也必須是本機。
 fn loopback_host(headers: &HeaderMap) -> bool {
@@ -179,10 +181,7 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         Some(ghostty::Focus::Missing) => {
             failure(StatusCode::NOT_FOUND, "找不到這個 session 的分頁")
         }
-        Some(ghostty::Focus::Unsupported) => failure(
-            StatusCode::NOT_IMPLEMENTED,
-            "無法操作終端機（支援 macOS 的 Ghostty 與 Windows 的 Windows Terminal）",
-        ),
+        Some(ghostty::Focus::Unsupported) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
     }
 }
 
@@ -229,18 +228,17 @@ pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) ->
             .into_iter()
             .find(|item| item.agent == request.agent && item.id == request.id)
             .ok_or((StatusCode::NOT_FOUND, "找不到這個已結束的 session"))?;
-        Ok(ghostty::open_tab(
-            &ended.cwd,
-            &format!("{}\n", ended.resume_command()),
-        ))
+        let command = ended.resume_command();
+        if ghostty::open_tab(&ended.cwd, &format!("{command}\n")) {
+            return Ok(true);
+        }
+        windows_terminal::open_tab(&ended.cwd, &command)
+            .map_err(|message| (StatusCode::NOT_IMPLEMENTED, message))
     })
     .await;
     match outcome {
         Ok(Ok(true)) => Json(json!({ "resumed": true })).into_response(),
-        Ok(Ok(false)) => failure(
-            StatusCode::NOT_IMPLEMENTED,
-            "無法操作 Ghostty（僅支援 macOS 上的 Ghostty）",
-        ),
+        Ok(Ok(false)) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
         Ok(Err((status, message))) => failure(status, message),
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "內部錯誤"),
     }
