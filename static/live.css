@@ -203,3 +203,92 @@
   opacity: 0.5;
   cursor: default;
 }
+
+.live-card-side {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.live-rename {
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.live-rename:hover:not([aria-disabled="true"]),
+.live-rename:focus-visible {
+  color: var(--accent-cyan);
+}
+
+.live-rename[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.live-dialog {
+  /* variables.css 以 * { margin: 0 } 重設了所有元素，會蓋掉瀏覽器讓對話框置中的 margin: auto */
+  margin: auto;
+  width: min(480px, calc(100% - 32px));
+  padding: 20px;
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  background: var(--bg-drawer);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-glass);
+}
+
+.live-dialog::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.live-dialog-title {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.live-dialog-hint {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.live-dialog-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--bg-select);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.live-dialog-input:focus {
+  outline: none;
+  border-color: var(--glass-border-focus);
+}
+
+.live-dialog-error {
+  min-height: 1.2em;
+  margin: 6px 0 10px;
+  color: var(--neon-red);
+  font-size: 0.85rem;
+}
+
+.live-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.live-dialog-manual {
+  margin-bottom: 12px;
+}
