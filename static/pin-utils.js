@@ -4,7 +4,7 @@ export function pinKey(session) {
   return `${session.agent}:${session.id}`;
 }
 
-// localStorage 的內容可能被手動改壞：不是字串陣列就當作沒有釘選
+// localStorage 的內容可能被手動改壞：只留下不重複的字串
 export function parsePins(text) {
   try {
     const value = JSON.parse(text);

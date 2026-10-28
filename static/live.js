@@ -72,7 +72,7 @@ function renderCard(session, pinned) {
   card.title = '跳到這個 session 的終端機分頁';
   card.addEventListener('click', () => focusSession(session));
   card.addEventListener('keydown', (event) => {
-    if (event.target !== card) return; // 卡片裡的 ✎ 按鈕自己處理
+    if (event.target !== card) return; // 卡片裡的 ✎、📌 按鈕自己處理
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       focusSession(session);
@@ -99,30 +99,29 @@ function renderCard(session, pinned) {
   return card;
 }
 
-// 釘選存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的清單互相蓋掉。
-// localStorage 讀寫失敗後就只用記憶體裡的清單，這次瀏覽仍然有效。
+// 釘選存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的清單互相蓋掉
 const PINS_KEY = 'live-pins';
 let pins = [];
-let pinsStored = true;
+let storageUsable = true;
 let lastData = null; // 切換釘選時立刻用上一份資料重畫，不等下一次輪詢
 
 function loadPins() {
-  if (!pinsStored) return pins;
+  if (!storageUsable) return pins;
   try {
     pins = parsePins(localStorage.getItem(PINS_KEY));
   } catch {
-    pinsStored = false;
+    storageUsable = false;
   }
   return pins;
 }
 
 function savePins(next) {
   pins = next;
-  if (!pinsStored) return;
+  if (!storageUsable) return;
   try {
     localStorage.setItem(PINS_KEY, JSON.stringify(next));
   } catch {
-    pinsStored = false;
+    storageUsable = false;
   }
 }
 
@@ -269,14 +268,12 @@ function renderProgress({ done, total, current }) {
 
 function render(data) {
   lastData = data;
-  const stored = loadPins();
-  const kept = prunePins(stored, data.live, data.recent);
-  if (kept.length !== stored.length) savePins(kept);
+  const current = loadPins();
   empty.hidden = data.live.length > 0;
   cards.hidden = data.live.length === 0;
   const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
   cards.replaceChildren(
-    ...orderByPins(data.live, kept).map((session) => renderCard(session, kept.includes(pinKey(session)))),
+    ...orderByPins(data.live, current).map((session) => renderCard(session, current.includes(pinKey(session)))),
   );
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map(renderRecent));
@@ -288,7 +285,12 @@ async function refresh() {
   try {
     const response = await fetch('/api/live', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    render(await response.json());
+    const data = await response.json();
+    // 只在成功取得時清理，連線失敗不會動到釘選
+    const stored = loadPins();
+    const kept = prunePins(stored, data.live, data.recent);
+    if (kept.length !== stored.length) savePins(kept);
+    render(data);
   } catch {
     status.textContent = '無法取得資料，稍後重試';
   }
