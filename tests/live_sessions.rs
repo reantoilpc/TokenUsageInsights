@@ -1789,6 +1789,24 @@ async fn a_claude_session_that_just_ended_is_listed_with_title_folder_and_last_i
 }
 
 #[tokio::test]
+async fn an_ended_session_without_a_chosen_name_is_named_after_its_ai_title() {
+    // 沒取名時原本只能拿最後指令當名稱（例如「yes」「/exit」），改用 Claude 自動產生的標題
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    let mut unnamed = finished_conversation("s-ai", "/work/erp", "yes", None);
+    unnamed.push(json!({"type":"ai-title","aiTitle":"修正登入頁驗證","sessionId":"s-ai"}));
+    server.aged_transcript("-work-erp", "s-ai", &unnamed, HOUR);
+    let mut named = finished_conversation("s-named", "/work/erp", "好", Some("登入頁修正"));
+    named.push(json!({"type":"ai-title","aiTitle":"另一個自動標題","sessionId":"s-named"}));
+    server.aged_transcript("-work-erp", "s-named", &named, 2 * HOUR);
+
+    let live = server.live().await;
+
+    assert_eq!(recent_ids(&live), vec!["s-ai", "s-named"]);
+    assert_eq!(live["recent"][0]["name"], "修正登入頁驗證");
+    assert_eq!(live["recent"][1]["name"], "登入頁修正");
+}
+
+#[tokio::test]
 async fn recent_sessions_exclude_what_is_open_what_is_old_background_runs_and_subagents() {
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
     let pid = server.alive_pid();
