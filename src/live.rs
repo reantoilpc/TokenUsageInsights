@@ -39,6 +39,8 @@ struct LiveSession {
     /// 我最後打的一個指令與它的時間（epoch 毫秒）。
     last_prompt: Option<String>,
     prompt_at: Option<u64>,
+    /// Claude Code 在我離開時寫的 recap；沒有、或已經比我最後的指令舊時為 null。
+    recap: Option<String>,
     /// 待辦清單進度；沒有清單時為 null。
     progress: Option<transcript::Progress>,
 }

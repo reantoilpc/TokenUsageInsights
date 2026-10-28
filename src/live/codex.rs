@@ -143,6 +143,7 @@ fn into_live_session(thread: &Thread) -> LiveSession {
         updated_at: thread.updated_at,
         last_prompt,
         prompt_at,
+        recap: None, // Codex 沒有對應的資料
         progress: transcript.progress,
     }
 }

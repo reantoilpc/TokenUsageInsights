@@ -82,6 +82,8 @@ function renderCard(session) {
   const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
   card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
   if (session.progress) card.append(renderProgress(session.progress));
+  // Claude Code 在我離開時寫的 recap：來自對話紀錄，一樣只用 textContent
+  if (session.recap) card.append(element('div', 'live-card-recap', session.recap));
   if (session.lastPrompt) {
     // 最後一行：我最後下的指令，時間只有一個、無標籤、靠最右
     const foot = element('div', 'live-card-foot');
