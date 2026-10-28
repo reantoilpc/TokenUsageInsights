@@ -1,5 +1,6 @@
 // 「進行中」頁面：每 3 秒向後端取一次資料；頁面不可見時暫停，回到可見時立即更新。
 import { renameCommand } from './rename-utils.js';
+import { orderByPins, parsePins, pinKey, prunePins, togglePin } from './pin-utils.js';
 
 const POLL_MS = 3000;
 let timer = null;
@@ -63,8 +64,8 @@ function ago(ms) {
 }
 
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
-function renderCard(session) {
-  const card = element('article', `live-card live-status-${session.status}`);
+function renderCard(session, pinned) {
+  const card = element('article', `live-card live-status-${session.status}${pinned ? ' live-pinned' : ''}`);
   card.dataset.key = `${session.agent}:${session.id}`;
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
@@ -81,6 +82,7 @@ function renderCard(session) {
   const side = element('span', 'live-card-side');
   side.append(element('span', 'live-card-state', `● ${STATUS_LABEL[session.status] || session.status}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
+  side.append(renderPinButton(session, pinned));
   head.append(element('span', 'live-card-title', session.name || session.folder), side);
   const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
   card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
@@ -95,6 +97,48 @@ function renderCard(session) {
     card.append(foot);
   }
   return card;
+}
+
+// 釘選存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的清單互相蓋掉。
+// localStorage 讀寫失敗後就只用記憶體裡的清單，這次瀏覽仍然有效。
+const PINS_KEY = 'live-pins';
+let pins = [];
+let pinsStored = true;
+let lastData = null; // 切換釘選時立刻用上一份資料重畫，不等下一次輪詢
+
+function loadPins() {
+  if (!pinsStored) return pins;
+  try {
+    pins = parsePins(localStorage.getItem(PINS_KEY));
+  } catch {
+    pinsStored = false;
+  }
+  return pins;
+}
+
+function savePins(next) {
+  pins = next;
+  if (!pinsStored) return;
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(next));
+  } catch {
+    pinsStored = false;
+  }
+}
+
+function renderPinButton(session, pinned) {
+  const button = element('button', 'live-pin', '📌');
+  button.type = 'button';
+  button.dataset.key = `pin:${pinKey(session)}`;
+  button.setAttribute('aria-pressed', String(pinned));
+  button.setAttribute('aria-label', '釘選在最前面');
+  button.title = pinned ? '取消釘選' : '釘選在最前面';
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // 點卡片本身是跳轉
+    savePins(togglePin(loadPins(), pinKey(session)));
+    if (lastData) render(lastData);
+  });
+  return button;
 }
 
 // 改名是半自動：網頁只複製 /rename 指令並跳到分頁，由我自己在分頁貼上、按 Enter。
@@ -224,10 +268,16 @@ function renderProgress({ done, total, current }) {
 }
 
 function render(data) {
+  lastData = data;
+  const stored = loadPins();
+  const kept = prunePins(stored, data.live, data.recent);
+  if (kept.length !== stored.length) savePins(kept);
   empty.hidden = data.live.length > 0;
   cards.hidden = data.live.length === 0;
   const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
-  cards.replaceChildren(...data.live.map(renderCard));
+  cards.replaceChildren(
+    ...orderByPins(data.live, kept).map((session) => renderCard(session, kept.includes(pinKey(session)))),
+  );
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map(renderRecent));
   if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();

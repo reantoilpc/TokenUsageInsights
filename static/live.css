@@ -70,6 +70,13 @@
 .live-status-working { --status-color: var(--neon-green); }
 .live-status-idle { --status-color: var(--accent-cyan); }
 
+/* 主題的強調色不是已代表狀態（青、綠、金），就是像錯誤（紅），釘選改以加粗的中性外框區分 */
+.live-pinned {
+  border-color: var(--text-secondary);
+  border-left-color: var(--status-color);
+  box-shadow: inset 0 0 0 1px var(--text-secondary);
+}
+
 .live-card-head {
   display: flex;
   justify-content: space-between;
@@ -211,7 +218,8 @@
   gap: 8px;
 }
 
-.live-rename {
+.live-rename,
+.live-pin {
   padding: 0 4px;
   border: none;
   border-radius: 4px;
@@ -230,6 +238,17 @@
 .live-rename[aria-disabled="true"] {
   opacity: 0.4;
   cursor: default;
+}
+
+/* 📌 是彩色 emoji，color 改不了：沒釘時以去色加半透明呈現淡色 */
+.live-pin[aria-pressed="false"] {
+  filter: grayscale(1);
+  opacity: 0.4;
+}
+
+.live-pin[aria-pressed="false"]:hover,
+.live-pin[aria-pressed="false"]:focus-visible {
+  opacity: 0.8;
 }
 
 .live-dialog {
