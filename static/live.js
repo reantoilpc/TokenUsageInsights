@@ -1,4 +1,6 @@
 // 「進行中」頁面：每 3 秒向後端取一次資料；頁面不可見時暫停，回到可見時立即更新。
+import { renameCommand } from './rename-utils.js';
+
 const POLL_MS = 3000;
 let timer = null;
 
@@ -69,16 +71,17 @@ function renderCard(session) {
   card.title = '跳到這個 session 的終端機分頁';
   card.addEventListener('click', () => focusSession(session));
   card.addEventListener('keydown', (event) => {
+    if (event.target !== card) return; // 卡片裡的 ✎ 按鈕自己處理
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       focusSession(session);
     }
   });
   const head = element('div', 'live-card-head');
-  head.append(
-    element('span', 'live-card-title', session.name || session.folder),
-    element('span', 'live-card-state', `● ${STATUS_LABEL[session.status] || session.status}`),
-  );
+  const side = element('span', 'live-card-side');
+  side.append(element('span', 'live-card-state', `● ${STATUS_LABEL[session.status] || session.status}`));
+  if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
+  head.append(element('span', 'live-card-title', session.name || session.folder), side);
   const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
   card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
   if (session.progress) card.append(renderProgress(session.progress));
@@ -93,6 +96,84 @@ function renderCard(session) {
   }
   return card;
 }
+
+// 改名是半自動：網頁只複製 /rename 指令並跳到分頁，由我自己在分頁貼上、按 Enter。
+// 只在閒置時開放：等你回覆時貼上會打進問題的回答欄，工作中可能開著權限框（Enter 等於核准）。
+const RENAME_BLOCKED = { working: '工作中，等它閒置再改名', waiting: '正在等你回覆，回覆後再改名' };
+const renameDialog = document.getElementById('rename-dialog');
+const renameForm = document.getElementById('rename-form');
+const renameInput = document.getElementById('rename-input');
+const renameError = document.getElementById('rename-error');
+const renameManual = document.getElementById('rename-manual');
+const renameCommandField = document.getElementById('rename-command');
+const renameSubmit = document.getElementById('rename-submit');
+// 對話框在卡片外面，每 3 秒重畫卡片不會清掉正在輸入的名稱
+let renaming = null;
+
+function renderRenameButton(session) {
+  const button = element('button', 'live-rename', '✎');
+  button.type = 'button';
+  button.dataset.key = `rename:${session.agent}:${session.id}`;
+  const blocked = session.status === 'idle' ? null : RENAME_BLOCKED[session.status] || '只有閒置時可以改名';
+  // 用 aria-disabled 而不是 disabled：停用的按鈕不會顯示提示，點了也不會有反應
+  if (blocked) button.setAttribute('aria-disabled', 'true');
+  button.title = blocked || '改名（等同在 CLI 打 /rename）';
+  button.setAttribute('aria-label', button.title);
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // 點卡片本身是跳轉
+    if (blocked) notify(blocked);
+    else openRename(session);
+  });
+  return button;
+}
+
+function showManualCopy(visible, command = '') {
+  renameManual.hidden = !visible;
+  renameCommandField.value = command;
+  renameSubmit.textContent = visible ? '前往分頁' : '複製並前往分頁';
+}
+
+function openRename(session) {
+  renaming = session;
+  renameInput.value = session.name || '';
+  renameError.textContent = '';
+  showManualCopy(false);
+  renameDialog.showModal();
+  renameInput.select();
+}
+
+async function goToTab(session, command) {
+  renameDialog.close();
+  const result = await post('/api/live/focus', session);
+  // 跳不過去也已經複製好了，自己切過去貼上即可
+  notify(result.ok
+    ? `已複製「${command}」，請在分頁按 Ctrl+V、Enter`
+    : `已複製「${command}」，但${result.message}，請自己切過去貼上`);
+}
+
+renameInput.addEventListener('input', () => {
+  renameError.textContent = '';
+  showManualCopy(false); // 名稱改了，先前顯示的指令就過時了
+});
+document.getElementById('rename-cancel').addEventListener('click', () => renameDialog.close());
+renameForm.addEventListener('submit', async (event) => {
+  event.preventDefault(); // 名稱不合格時對話框要留著
+  if (!renameManual.hidden) return goToTab(renaming, renameCommandField.value);
+  const result = renameCommand(renameInput.value);
+  if (result.error) {
+    renameError.textContent = result.error;
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(result.command);
+  } catch {
+    // 瀏覽器不給寫剪貼簿：顯示指令讓我自己複製，複製完再按「前往分頁」
+    showManualCopy(true, result.command);
+    renameCommandField.select();
+    return;
+  }
+  goToTab(renaming, result.command);
+});
 
 // 剛按過「接續」的 session：每 3 秒重畫時按鈕會重建，停用狀態要跨重畫保留，否則會連點開出兩個分頁
 const resuming = new Set();

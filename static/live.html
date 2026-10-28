@@ -9,7 +9,7 @@
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=37">
-  <link rel="stylesheet" href="/static/live.css?v=9">
+  <link rel="stylesheet" href="/static/live.css?v=10">
 </head>
 <body>
   <main class="live-main">
@@ -29,6 +29,22 @@
       <p id="recent-empty" class="live-empty live-empty-small" hidden>24 小時內沒有結束的 session</p>
     </section>
   </main>
-  <script src="/static/live.js?v=9"></script>
+  <dialog id="rename-dialog" class="live-dialog" aria-labelledby="rename-title">
+    <form id="rename-form" method="dialog">
+      <h2 id="rename-title" class="live-dialog-title">改名</h2>
+      <p class="live-dialog-hint">按「複製並前往分頁」後，到分頁按 Ctrl+V、Enter，由 Claude Code 執行 /rename。</p>
+      <input id="rename-input" class="live-dialog-input" type="text" autocomplete="off" aria-label="新名稱">
+      <p id="rename-error" class="live-dialog-error" role="alert"></p>
+      <div id="rename-manual" class="live-dialog-manual" hidden>
+        <p class="live-dialog-hint">無法自動複製。請按 Ctrl+C 複製下面的指令，再按「前往分頁」。</p>
+        <input id="rename-command" class="live-dialog-input" type="text" readonly aria-label="要貼上的指令">
+      </div>
+      <div class="live-dialog-actions">
+        <button type="button" id="rename-cancel" class="live-resume">取消</button>
+        <button type="submit" id="rename-submit" class="live-resume">複製並前往分頁</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="/static/live.js?v=10"></script>
 </body>
 </html>

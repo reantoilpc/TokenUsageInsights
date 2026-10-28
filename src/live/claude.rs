@@ -176,7 +176,8 @@ pub fn recent(claude_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<E
                 cwd,
                 agent: "claude",
                 id,
-                name: transcript.title,
+                // 與進行中相同：自己取的名字優先，沒取名就用 Claude Code 自動產生的標題
+                name: transcript.title.or(transcript.ai_title),
                 last_prompt,
                 prompt_at,
                 updated_at,
