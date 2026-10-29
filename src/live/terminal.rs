@@ -57,6 +57,15 @@ pub fn focus(session: &LiveSession) -> Focus {
     }
 }
 
+/// 關掉 session 所在的分頁，回傳有沒有關到。agent 會收到掛斷訊號（SIGHUP），像 /exit 一樣收尾。
+/// `tty` 是 agent 程序的控制終端機，只有 Ghostty 用得上。
+pub fn close(session: &LiveSession, tty: Option<&str>) -> bool {
+    let name = session.name.as_deref();
+    let how = TitleMatch::of(session.agent);
+    ghostty::close(tty, &session.cwd, name.unwrap_or(""), how)
+        .unwrap_or_else(|| windows_terminal::close(name, how))
+}
+
 /// 開新分頁、切到資料夾並執行 `command`；agent 結束後留下一般的 shell。
 pub fn open_tab(cwd: &str, command: &str) -> Open {
     if ghostty::open_tab(cwd, &format!("{command}\n")) {

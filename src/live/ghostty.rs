@@ -90,6 +90,53 @@ pub fn focus(cwd: &str, name: &str, how: TitleMatch) -> Focus {
     }
 }
 
+/// 關掉 session 所在的終端機；分頁只剩它時 Ghostty 會連分頁一起關，分割出來的其他窗格不受影響。
+/// 1.4 起終端機有 tty 屬性，可以精準對到程序；1.3 沒有這個屬性（取用時出錯），改用資料夾與
+/// 標題比對，而且必須剛好一個符合，才不會關錯。Ghostty 的 close 不會跳出確認視窗。
+const CLOSE_SCRIPT: &str = r#"on run argv
+  if application "Ghostty" is not running then return "missing"
+  set wantTty to item 1 of argv
+  set wantDir to item 2 of argv
+  set wantName to item 3 of argv
+  set wantMode to item 4 of argv
+  tell application "Ghostty"
+    if wantTty is not "" then
+      try
+        repeat with term in terminals
+          if (tty of term) is wantTty then
+            close term
+            return "ok"
+          end if
+        end repeat
+        return "missing"
+      end try
+    end if
+    if wantName is "" then return "missing"
+    set found to {}
+    repeat with term in terminals
+      set title to name of term
+      if (working directory of term) is wantDir and ((wantMode is "ends" and title ends with wantName) or (wantMode is "starts" and title starts with (wantName & " | "))) then set end of found to contents of term
+    end repeat
+    if (count of found) is not 1 then return "missing"
+    close (item 1 of found)
+  end tell
+  return "ok"
+end run"#;
+
+/// 關掉 session 所在的終端機，回傳有沒有關到；沒有 Ghostty 或不是 macOS 時回傳 None。
+pub fn close(tty: Option<&str>, cwd: &str, name: &str, how: TitleMatch) -> Option<bool> {
+    let mode = match how {
+        TitleMatch::EndsWith => "ends",
+        TitleMatch::StartsWith => "starts",
+    };
+    let output = Command::new("osascript")
+        .args(["-e", CLOSE_SCRIPT, tty.unwrap_or(""), cwd, name, mode])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).trim() == "ok")
+}
+
 /// 在最前面的視窗開一個新分頁（沒有視窗就開新視窗）：資料夾以初始工作資料夾設定，
 /// 指令以初始輸入打進 shell，所以結束後分頁仍是一般的 shell。兩者都以參數傳入。
 const NEW_TAB_SCRIPT: &str = r#"on run argv

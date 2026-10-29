@@ -2,6 +2,7 @@
 import { renameCommand } from './rename-utils.js';
 import { orderByPins, parsePins, pinKey, prunePins, togglePin } from './pin-utils.js';
 import { contextLabel } from './context-utils.js';
+import { CONFIRM_MS, closeNotice, isArmed, pressClose } from './close-utils.js';
 
 const POLL_MS = 3000;
 let timer = null;
@@ -21,7 +22,7 @@ function notify(text) {
 }
 
 // 只送 agent 與 id；資料夾、名稱與指令一律由伺服器自己決定。
-// 回傳 { ok, message }；錯誤內容不一定是 JSON，所以解析失敗時退回狀態碼。
+// 回傳 { ok, data } 或 { ok, message }；錯誤內容不一定是 JSON，所以解析失敗時退回狀態碼。
 async function post(path, item) {
   try {
     const response = await fetch(path, {
@@ -29,7 +30,7 @@ async function post(path, item) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent: item.agent, id: item.id }),
     });
-    if (response.ok) return { ok: true };
+    if (response.ok) return { ok: true, data: await response.json().catch(() => ({})) };
     let message = '';
     try {
       message = (await response.json()).message;
@@ -87,6 +88,7 @@ function renderCard(session, pinned) {
   side.append(element('span', 'live-card-state', `● ${state}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
   side.append(renderPinButton(session, pinned));
+  if (session.status !== 'working') side.append(renderCloseButton(session)); // 工作中被關會中斷正在跑的回合
   head.append(element('span', 'live-card-title', session.name || session.folder), side);
   card.append(head);
   const meta = renderMeta(session);
@@ -159,6 +161,43 @@ function renderPinButton(session, pinned) {
     if (lastData) render(lastData);
   });
   return button;
+}
+
+// 關閉：結束 session 並關掉它的分頁，等同在 CLI 打 /exit 再關分頁。要點兩下才送出（見 close-utils.js），
+// 每 3 秒重畫時按鈕會重建，所以「準備關閉」與「關閉中」都記在卡片外面
+let closeArmed = null;
+let closeDisarmTimer = null;
+const closing = new Set();
+
+function renderCloseButton(session) {
+  const key = `${session.agent}:${session.id}`;
+  const armed = isArmed(closeArmed, key, Date.now());
+  const busy = closing.has(key);
+  const label = busy ? '關閉中…' : armed ? '確定關閉？' : '✕';
+  const button = element('button', `live-close${armed ? ' live-close-armed' : ''}`, label);
+  button.type = 'button';
+  button.dataset.key = `close:${key}`;
+  button.disabled = busy;
+  button.title = '結束這個 session 並關閉分頁';
+  button.setAttribute('aria-label', armed ? '再按一次確定關閉' : button.title);
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // 點卡片本身是跳轉
+    const pressed = pressClose(closeArmed, key, Date.now());
+    closeArmed = pressed.armed;
+    clearTimeout(closeDisarmTimer);
+    if (pressed.send) closeSession(session, key);
+    else closeDisarmTimer = setTimeout(() => lastData && render(lastData), CONFIRM_MS);
+    if (lastData) render(lastData);
+  });
+  return button;
+}
+
+async function closeSession(session, key) {
+  closing.add(key);
+  const result = await post('/api/live/close', session);
+  closing.delete(key);
+  notify(result.ok ? closeNotice(result.data) : result.message);
+  refresh();
 }
 
 // 改名是半自動：網頁只複製 /rename 指令並跳到分頁，由我自己在分頁貼上、按 Enter。

@@ -2,8 +2,10 @@
 //! 即時狀態不進資料庫，每次請求即時讀取。
 
 mod claude;
+mod close;
 mod codex;
 mod ghostty;
+mod process;
 mod terminal;
 mod transcript;
 mod windows_terminal;
@@ -30,6 +32,9 @@ struct LiveSession {
     /// 工作資料夾的完整路徑，只在伺服器內部用來跳轉與接續，不回給前端。
     #[serde(skip)]
     cwd: String,
+    /// 執行這個 session 的程序，只在伺服器內部用來關閉；分不出是哪個程序時是空的。
+    #[serde(skip)]
+    pids: Vec<u32>,
     agent: &'static str,
     id: String,
     name: Option<String>,
@@ -94,15 +99,21 @@ pub async fn get_live(headers: HeaderMap) -> Response {
 
 /// Claude Code 與 Codex 的 session 合在一起排序。
 fn live_sessions() -> Vec<LiveSession> {
-    let mut sessions = claude::sessions(&crate::db::get_claude_dir());
-    sessions.extend(codex::sessions(&crate::db::get_codex_dir()));
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut sessions = every_process_session();
     // 同一個 session 可能有兩個程序（例如 Ctrl+Z 暫停後又在同一個分頁接續），只留最近
     // 更新的那個：那是正在用的，跳轉也照它的資料找分頁
     let mut seen = HashSet::new();
     sessions.retain(|session| seen.insert((session.agent, session.id.clone())));
     // 穩定排序：同一種狀態內維持最近有動靜的在前
     sessions.sort_by_key(|session| status_rank(session.status));
+    sessions
+}
+
+/// 每個程序一筆、最近更新的在前，同一個 session 可能出現好幾筆。
+fn every_process_session() -> Vec<LiveSession> {
+    let mut sessions = claude::sessions(&crate::db::get_claude_dir());
+    sessions.extend(codex::sessions(&crate::db::get_codex_dir()));
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions
 }
 
@@ -183,6 +194,36 @@ pub async fn post_focus(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
             failure(StatusCode::NOT_FOUND, "找不到這個 session 的分頁")
         }
         Some(terminal::Focus::Unsupported) => failure(StatusCode::NOT_IMPLEMENTED, NO_TERMINAL),
+    }
+}
+
+/// 關閉 session：關掉它的分頁並確認程序結束，同一個 session 被暫停的舊程序也一起結束。
+pub async fn post_close(headers: HeaderMap, Json(request): Json<SessionRef>) -> Response {
+    if !from_dashboard(&headers) {
+        return failure(StatusCode::FORBIDDEN, "請求來源不符");
+    }
+    let outcome = tokio::task::spawn_blocking(move || {
+        let copies: Vec<LiveSession> = every_process_session()
+            .into_iter()
+            .filter(|session| session.agent == request.agent && session.id == request.id)
+            .collect();
+        close::close(&copies)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(closed)) => {
+            Json(json!({ "ended": closed.ended, "tabClosed": closed.tab_closed })).into_response()
+        }
+        Ok(Err(close::Refusal::Missing)) => failure(StatusCode::NOT_FOUND, "找不到這個 session"),
+        Ok(Err(close::Refusal::Working)) => failure(
+            StatusCode::CONFLICT,
+            "工作中不能關閉，等它閒置，或到分頁按 Ctrl+C 中斷",
+        ),
+        Ok(Err(close::Refusal::CannotTell)) => failure(
+            StatusCode::CONFLICT,
+            "同一個資料夾開了多個 Codex，分不出是哪一個，請到分頁裡結束",
+        ),
+        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "內部錯誤"),
     }
 }
 

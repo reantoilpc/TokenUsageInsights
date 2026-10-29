@@ -34,6 +34,17 @@ if ([TokenInsights.Win]::IsIconic($hwnd)) { [void][TokenInsights.Win]::ShowWindo
 [TokenInsights.Win]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
 [void][TokenInsights.Win]::SetForegroundWindow($hwnd)"#;
 
+/// 按下第 `$index` 個分頁的關閉鈕；動手前確認那個分頁的標題仍是 `$expected`（大小寫也要相同），
+/// 列出分頁之後分頁順序變了就不關。
+const CLOSE_TAB: &str = r#"$isTab = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+$tabs = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $isTab)
+if ($index -ge $tabs.Count -or $tabs[$index].Current.Name -cne $expected) { exit 0 }
+$byId = New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, 'CloseButton')
+$button = $tabs[$index].FindFirst([System.Windows.Automation.TreeScope]::Descendants, $byId)
+if (-not $button) { exit 0 }
+$button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+'ok'"#;
+
 /// 以 Windows PowerShell 對第一個視窗執行腳本，成功時回傳標準輸出；沒有 powershell.exe
 /// （不是 WSL）時回傳 None。
 fn on_first_window(script: &str) -> Option<Vec<u8>> {
@@ -93,6 +104,27 @@ pub fn focus(name: Option<&str>, how: TitleMatch) -> Focus {
     // 分頁已經切過去了；帶不到前景也不算失敗
     on_first_window(BRING_TO_FRONT);
     Focus::Done
+}
+
+/// 關掉標題符合名稱的分頁，回傳有沒有關到。必須剛好一個分頁符合：同名的分頁不只一個時
+/// 分不出是哪一個，一個都不關。整個分頁會關掉，分割出來的其他窗格也一起關。
+pub fn close(name: Option<&str>, how: TitleMatch) -> bool {
+    let (Some(name), Some(titles)) = (name, tab_titles()) else {
+        return false;
+    };
+    let mut matching = titles
+        .iter()
+        .enumerate()
+        .filter(|(_, title)| how.matches(title, name));
+    let (Some((index, title)), None) = (matching.next(), matching.next()) else {
+        return false;
+    };
+    // 標題來自分頁，以 base64 放進腳本，不經過 PowerShell 的字串解析
+    let script = format!(
+        "$index = {index}\n$expected = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))\n{CLOSE_TAB}",
+        STANDARD.encode(title)
+    );
+    on_first_window(&script).is_some_and(|output| String::from_utf8_lossy(&output).trim() == "ok")
 }
 
 /// 在第一個視窗開新分頁，以 wsl.exe 切到資料夾後執行 `command`，agent 結束後留下一般的

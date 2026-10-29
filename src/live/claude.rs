@@ -64,6 +64,7 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> Option<LiveSe
     Some(LiveSession {
         folder: folder_of(&registered.cwd),
         cwd: registered.cwd,
+        pids: vec![registered.pid],
         agent: "claude",
         id: registered.session_id,
         // 分頁標題顯示的名稱：自己取的名字優先，沒取名就是 Claude Code 自動產生的標題；

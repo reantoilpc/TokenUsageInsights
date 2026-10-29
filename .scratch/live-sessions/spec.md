@@ -31,7 +31,9 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 「進行中」的卡片可以釘選：點 📌 後，那張卡片固定排在最前面，不再隨狀態變化跳位置；再點一次取消。釘選只記在這個瀏覽器裡。
 
-整個功能只讀取本機既有的對話紀錄與 session 清單，不改 Claude Code 或 Codex 的任何設定、不裝 hook、不呼叫任何 AI 服務。網站預設只接受本機連線。
+閒置或等你回覆的卡片可以關閉：點 ✕、再點一次「確定關閉？」，看板關掉那個 session 的終端機分頁，agent 像在 CLI 打 `/exit` 一樣收尾後結束，釋放它佔的記憶體；找不到分頁時只結束 agent。關掉的 session 會出現在「最近結束」，可以再接續。
+
+除了關閉時結束 session 的程序與分頁，整個功能只讀取本機既有的對話紀錄與 session 清單，不改 Claude Code 或 Codex 的任何設定、不裝 hook、不呼叫任何 AI 服務。網站預設只接受本機連線。
 
 ## User Stories
 
@@ -121,6 +123,14 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 55. 身為開發者，我不想同一個 session 出現兩張一樣的卡片（例如以 Ctrl+Z 暫停後，又在同一個分頁接續）。
 56. 身為開發者，我想讓閒置的卡片不寫「閒置」兩個字、最後一行不出現 `[Image #2]` 這種佔位字，讓卡片只留有用的資訊，標題也比較常一行放得下。
 57. 身為開發者，我想在 session 剛壓縮完時，卡片不要還顯示壓縮前的大數字，以免以為它又快要被壓縮了。
+
+### 關閉
+
+58. 身為開發者，我想從卡片直接關掉不再需要的 session 和它的終端機分頁，效果等同在 CLI 打 `/exit` 再關分頁，因為每個 Claude Code 連同子程序佔 400～500 MB，開了十幾個就把記憶體吃掉一半。
+59. 身為開發者，我想要點兩下才真的關閉（第一下變成「確定關閉？」，3 秒內再點一次），以免手滑關掉正在用的 session。
+60. 身為開發者，我不想在 session 工作中時能關閉，以免中斷改到一半的回合；要停就自己到分頁按 Ctrl+C。
+61. 身為開發者，我想在找不到分頁時仍能結束 agent，並被告知分頁沒有關；看板分不出是哪個程序時（同一個資料夾開了多個 Codex）則什麼都不做並說明原因，以免關錯。
+62. 身為開發者，我想讓同一個 session 被 Ctrl+Z 暫停的舊程序也一起結束，否則卡片關不掉，記憶體也沒釋放。
 
 ## Implementation Decisions
 
@@ -214,13 +224,29 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 同一個 `agent:id` 有多個程序時只回一筆，取登記檔更新時間最新的那個（正在用的），跳轉也照它的資料找分頁。實際碰過的情況：在同一個分頁以 Ctrl+Z 暫停 `claude`，再 `claude --resume` 同一個 id，暫停中的程序 `kill(pid, 0)` 一樣會成功，兩筆登記都算還開著。
 - 刻意不放上卡片：模型與權限模式（各 session 幾乎都一樣）；git 分支（紀錄的是整個資料夾當時所在的分支，同一個資料夾的 session 會顯示同一個，容易誤以為是那個 session 自己的分支）；壓縮次數（要每次掃整份紀錄）；recap 的翻譯（Claude Code 有時用英文寫，翻譯要呼叫模型）。
 
+### 關閉
+
+- 只有閒置與等你回覆的卡片有 ✕；伺服器收到請求時以當下的狀態再確認一次，已經是工作中就拒絕（409）。
+- 點兩下才送出：第一下按鈕變成「確定關閉？」，3 秒內在同一張卡片再點一次才送出，3 秒後自動恢復。卡片每 3 秒重畫，所以「準備關閉」與「關閉中」記在卡片外面（`static/close-utils.js`）。
+- 流程：先關分頁，agent 收到掛斷訊號（SIGHUP）自己收尾；5 秒內沒結束就補送 SIGTERM，再等 5 秒；仍沒結束就回報「已送出結束訊號，程序還沒結束」，不強制結束執行中的程序。找不到分頁時直接送 SIGTERM。實測 Claude Code 收到 SIGHUP 或 SIGTERM 約 2.5 秒結束，效果與 `/exit` 相同：登記檔與通訊 socket 刪除、MCP 子程序一起結束、印出 `claude --resume <id>`；Codex 收到 SIGTERM 時本體與外層的 node 包裝都會結束。
+- 不能替我打 `/exit`：WSL 核心關閉了 TIOCSTI（`dev.tty.legacy_tiocsti = 0`），Windows Terminal 也沒有送文字到分頁的指令，所以用訊號。
+- 先關分頁、不先送 SIGTERM：agent 一結束，分頁標題就變回 shell 的標題，之後就認不出是哪個分頁了。
+- Windows Terminal：以 UI Automation 找第一個視窗裡標題符合的分頁（比對規則同跳轉），必須剛好一個符合；按它的「關閉索引標籤」鈕（AutomationId 為 `CloseButton`），按之前再確認那個位置的標題沒變。整個分頁會關，分割出來的其他窗格也一起關，這個風險接受（沒顯示的分頁看不到裡面有幾個窗格）。關分頁不會跳確認視窗。
+- Ghostty：以 AppleScript 的 `close` 關掉 agent 所在的那個終端機，分頁只剩它時連分頁一起關，其他窗格不受影響；`close` 不跳確認視窗。1.4 起終端機有 `tty` 屬性，以 agent 程序的控制終端機精準對應；1.3 沒有這個屬性，改用資料夾與標題比對，必須剛好一個符合。Ghostty 回報不支援時改試 Windows Terminal，順序同跳轉。
+- 找不到分頁（session 沒有名稱、同名分頁不只一個、不在第一個 Windows Terminal 視窗、沒有支援的終端機）時只結束 agent，提示「已結束，但找不到它的分頁，分頁沒有關」。
+- 被 Ctrl+Z 暫停的程序收不到 SIGTERM（恢復執行後也會馬上再停下來），所以同一個 session 的暫停中程序一律以 SIGKILL 結束；它的 MCP 子程序會跟著結束，登記檔會留下，但它的程序已不存在，看板不會再顯示。
+- 只動確實是那個 agent 的程序：pid 由伺服器自己查（Claude Code 取登記檔，Codex 取 `ps`），程式名稱（argv[0] 的最後一段）必須是 `claude` 或 `codex`；每次送訊號前確認啟動時間沒變，pid 被系統給了別的程式時不送。Linux 從 `/proc` 讀，macOS 用 `/bin/ps`。
+- Codex：以 `codex resume <id>` 開的程序直接對應；沒帶 id 的程序只有在資料夾裡只有一個時才知道是它，好幾個時拒絕（409「同一個資料夾開了多個 Codex，分不出是哪一個，請到分頁裡結束」），分頁與程序都不動。
+- 關閉成功後立刻重新整理清單；結果與失敗原因顯示在頁面頂端的提示列（與跳轉失敗相同），因為成功時卡片已經不在了。
+
 ### HTTP 介面
 
 - `GET /api/live`：回傳「進行中」與「最近結束」兩份清單，已排序、狀態已判斷好；前端只負責畫。
 - `POST /api/live/focus`：請求內容為 agent 與 id。
 - `POST /api/live/resume`：請求內容為 agent 與 id。
+- `POST /api/live/close`：請求內容為 agent 與 id；回傳 `{ended, tabClosed}`。工作中或分不出是哪個程序時回 409，找不到 session 或程序時回 404。
 - `GET /api/live` 的內容含我打過的指令與資料夾，所以 Host 也必須是本機位址（localhost、127.0.0.1、[::1]），否則回 403；這擋掉 DNS rebinding 的網頁讀取。
-- 兩個 POST 都必須：請求的來源（Origin）等於伺服器自己的位址、內容類型為 JSON；缺少或不符一律拒絕。
+- 三個 POST 都必須：請求的來源（Origin）等於伺服器自己的位址、內容類型為 JSON；缺少或不符一律拒絕。
 - 預設綁定位址從 `0.0.0.0` 改為 `127.0.0.1`；仍可用 `HOST` 環境變數覆寫。這是對上游行為的刻意偏離。
 - 原本的 `/sync` 等既有端點不在此次修改範圍。
 
@@ -259,6 +285,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 解析邏輯先不另外加單元測試層；若實作時發現某個邊界情況透過 HTTP 接縫太難測，再補。
 - 改名的名稱驗證是純前端邏輯：`static/rename-utils.js` 的 `renameCommand`，比照既有的前端工具以 `npm test` 測試。對話框、剪貼簿、跳轉與 ✎ 的停用規則以瀏覽器手動確認（攔下 POST，避免切換真正的分頁）。
 - 釘選的排序、切換與清理是純前端邏輯：`static/pin-utils.js`，比照 `rename-utils.js` 以 `npm test` 測試。📌 的外觀、點擊不觸發跳轉、重新整理後保留與 localStorage 失效時的行為以瀏覽器手動確認。
+- 關閉：以名稱為 `claude`／`codex` 的 `sleep` 程序（`exec -a`，交給 init 收養，結束後不會留成 zombie）當作 agent，透過 HTTP 接縫測試：關分頁後程序結束、按了關閉鈕但程序沒結束時補送 SIGTERM、找不到或同名分頁時只送 SIGTERM、不理 SIGTERM 的程序回報還在而且不強制結束、暫停中的舊程序一起結束、工作中與 Codex 分不出程序時拒絕、程式名稱不對的 pid 不送訊號、來源不符時拒絕。假的 powershell.exe 第一次列出分頁、第二次按關閉鈕時對 agent 送 SIGHUP；假的 osascript 同樣送 SIGHUP。Ghostty 收到的 tty 以 `script` 開的虛擬終端機驗證（只在 Linux 跑）。兩段式確認與提示文字是純前端邏輯（`static/close-utils.js`），以 `npm test` 測試。真正的 Windows Terminal 以另開 port 的看板、在新分頁開 `claude -n` 手動驗證。
 - 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）與剛壓縮的標示、重複程序合併，都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
 
 ## Out of Scope
@@ -272,6 +299,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 多語系介面、README 與 CHANGELOG 更新、發版。
 - 全自動改名（模擬鍵盤、AppleScript 送字或直接改 Claude Code 的檔案）；Codex 與「最近結束」的改名。
 - 釘選的拖曳排序、跨瀏覽器同步，以及「最近結束」的釘選。
+- 關閉：批次關閉、每張卡的記憶體用量、強制結束執行中的程序、只關分頁不結束 agent。關閉不會退回用量額度：額度算的是已經送出的 token，閒置的 session 本來就不會送。
 - 卡片上的模型、權限模式、git 分支與壓縮次數；context 大小的變色提醒與百分比；Codex 的「剛壓縮」標示；recap 的翻譯。
 - 鍵盤快捷鍵（1–9 跳轉）、桌面通知。
 - 把即時狀態存進資料庫、歷史分析。
@@ -287,5 +315,6 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - **風險**：`GET /api/live` 與兩個 POST 都要求 Host 是本機位址，所以即使用 `HOST` 把網站改綁到非本機位址，也只能用 localhost 或 127.0.0.1 這類名稱連進來讀取；區網用法不在這次範圍。
 - **AppleScript 的坑**：在 Ghostty 的 `tell` 區塊裡，`tab` 指的是它的 tab 類別，會被轉成「tab」這個字而不是定位字元；分隔符號要在區塊外先定義。假的 osascript 測不出這種問題，所以保留一個要真的 Ghostty 才能跑的測試：`cargo test -- --ignored real_ghostty`。
 - **程式碼審查**：`/mattpocock-skills:code-review` 的發現已處理，細節見 commit 訊息；刻意不做的是把 agent 與 status 改成 enum（目前只有兩種 agent，之後有第三種再做）。Windows Terminal 那一輪（Standards 8 項、Spec 5 項）全部處理：兩個行為問題見 commit c84c7d2，結構與註解見 e8f2815，規格文字見本檔。
+- **Ghostty 關閉尚未實測**：這台開發機是 WSL，沒有 Ghostty；`close` 與 `tty` 是依 Ghostty 原始碼（1.3 加入 `close`，1.4 加入 `tty`）寫的，自動測試只驗證送出的參數。要在 Mac 上手動試一次。
 - **終端機的程式結構**：`terminal` 模組放兩種終端機共用的型別與「先 Ghostty、再 Windows Terminal」的切換順序；`ghostty`、`windows_terminal` 各自只處理自己那一種。
 - **工作單拆分建議**：先做 Claude Code 的清單與卡片（含跳轉），再加 Codex，最後做「最近結束」與接續，每一段都能獨立驗證。
