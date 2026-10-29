@@ -2621,29 +2621,31 @@ async fn server_with_closable_session() -> (LiveServer, u32) {
     (server, pid)
 }
 
-impl LiveServer {
-    /// 沒有 Ghostty，改由 Windows Terminal 提供分頁：第一次呼叫 powershell.exe 列出 `titles`，
-    /// 之後的呼叫是按關閉鈕，印出 ok；`hangs_up` 有值時對那個 pid 送 SIGHUP，就像分頁關掉時
-    /// agent 收到的訊號。
-    fn windows_terminal_tabs(&self, titles: &[&str], hangs_up: Option<u32>) {
-        self.fake.failing("osascript");
-        let listing: String = titles.iter().map(|title| format!("{title}\r\n")).collect();
-        let dir = self.fake.dir.display();
-        fs::write(self.fake.dir.join("tabs.txt"), listing).unwrap();
-        let hangup = hangs_up.map_or(String::new(), |pid| format!("kill -HUP {pid}; "));
-        self.fake.scripted(
-            "powershell.exe",
-            &format!(
-                "if [ \"$(wc -l < '{dir}/powershell.exe.args')\" -eq 1 ]; then cat '{dir}/tabs.txt'; else {hangup}echo ok; fi"
-            ),
-        );
-    }
+/// 沒有 Ghostty，改由 Windows Terminal 提供分頁：第一次呼叫 powershell.exe 列出 `titles`，
+/// 之後的呼叫是按關閉鈕，印出 ok；`hangs_up` 有值時對那個 pid 送 SIGHUP，就像分頁關掉時
+/// agent 收到的訊號。
+fn windows_terminal_tabs(server: &LiveServer, titles: &[&str], hangs_up: Option<u32>) {
+    server.fake.failing("osascript");
+    let listing: String = titles.iter().map(|title| format!("{title}\r\n")).collect();
+    let dir = server.fake.dir.display();
+    fs::write(server.fake.dir.join("tabs.txt"), listing).unwrap();
+    let hangup = hangs_up.map_or(String::new(), |pid| format!("kill -HUP {pid}; "));
+    server.fake.scripted(
+        "powershell.exe",
+        &format!(
+            "if [ \"$(wc -l < '{dir}/powershell.exe.args')\" -eq 1 ]; then cat '{dir}/tabs.txt'; else {hangup}echo ok; fi"
+        ),
+    );
 }
 
 #[tokio::test]
 async fn closing_a_card_closes_its_windows_terminal_tab_and_the_session_ends() {
     let (server, pid) = server_with_closable_session().await;
-    server.windows_terminal_tabs(&["Windows PowerShell", "✳ 別的工作", "✳ 芒果許"], Some(pid));
+    windows_terminal_tabs(
+        &server,
+        &["Windows PowerShell", "✳ 別的工作", "✳ 芒果許"],
+        Some(pid),
+    );
 
     let (status, body) = server
         .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
@@ -2720,7 +2722,7 @@ async fn ghostty_is_told_which_terminal_the_session_runs_in() {
 #[tokio::test]
 async fn without_a_matching_tab_the_session_is_ended_with_sigterm_and_no_tab_is_closed() {
     let (server, pid) = server_with_closable_session().await;
-    server.windows_terminal_tabs(&["Windows PowerShell", "✳ 別的工作"], None);
+    windows_terminal_tabs(&server, &["Windows PowerShell", "✳ 別的工作"], None);
 
     let (status, body) = server
         .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
@@ -2739,7 +2741,7 @@ async fn without_a_matching_tab_the_session_is_ended_with_sigterm_and_no_tab_is_
 #[tokio::test]
 async fn when_two_tabs_carry_the_name_neither_is_closed() {
     let (server, pid) = server_with_closable_session().await;
-    server.windows_terminal_tabs(&["✳ 芒果許", "✳ 芒果許"], None);
+    windows_terminal_tabs(&server, &["✳ 芒果許", "✳ 芒果許"], None);
 
     let (status, body) = server
         .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
@@ -2755,7 +2757,7 @@ async fn when_two_tabs_carry_the_name_neither_is_closed() {
 async fn a_session_still_running_after_its_tab_closed_is_sent_sigterm() {
     let (server, pid) = server_with_closable_session().await;
     // 按了關閉鈕，但 agent 沒有收到掛斷訊號
-    server.windows_terminal_tabs(&["✳ 芒果許"], None);
+    windows_terminal_tabs(&server, &["✳ 芒果許"], None);
 
     let (status, body) = server
         .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
@@ -2820,6 +2822,25 @@ async fn a_suspended_older_process_of_the_same_session_is_ended_too() {
 }
 
 #[tokio::test]
+async fn a_session_left_only_with_a_suspended_process_still_has_its_tab_closed() {
+    let (server, pid) = server_with_closable_session().await;
+    Command::new("kill")
+        .args(["-STOP", &pid.to_string()])
+        .status()
+        .unwrap();
+    // 暫停中的程序收不到掛斷訊號，要靠 SIGKILL 結束
+    windows_terminal_tabs(&server, &["✳ 芒果許"], None);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+}
+
+#[tokio::test]
 async fn a_process_that_is_not_the_agent_is_never_signalled() {
     // 登記檔留下的 pid 已經被系統給了別的程式
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
@@ -2864,7 +2885,7 @@ async fn a_codex_session_resumed_by_id_closes_its_tab() {
     let pid = server.agent_process("codex");
     server.codex_thread(T1, "/work/erp", Some("比較"), 1000, "user", "done");
     server.processes(&[(pid, "ttys003", &format!("codex resume {T1}"), "/work/erp")]);
-    server.windows_terminal_tabs(&["✳ 芒果許", "比較 | erp"], Some(pid));
+    windows_terminal_tabs(&server, &["✳ 芒果許", "比較 | erp"], Some(pid));
 
     let (status, body) = server
         .post_json(CLOSE, json!({"agent":"codex","id":T1}))

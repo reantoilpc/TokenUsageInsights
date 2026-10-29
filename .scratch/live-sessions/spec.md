@@ -226,15 +226,15 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 ### 關閉
 
-- 只有閒置與等你回覆的卡片有 ✕；伺服器收到請求時以當下的狀態再確認一次，已經是工作中就拒絕（409）。
+- ✕ 放在 📌 右邊，一律顯示（同 📌），滑鼠停留時說明「結束這個 session 並關閉分頁」；點了不觸發跳轉。只有閒置與等你回覆的卡片有 ✕；伺服器收到請求時以當下的狀態再確認一次，已經是工作中就拒絕（409）。
 - 點兩下才送出：第一下按鈕變成「確定關閉？」，3 秒內在同一張卡片再點一次才送出，3 秒後自動恢復。卡片每 3 秒重畫，所以「準備關閉」與「關閉中」記在卡片外面（`static/close-utils.js`）。
 - 流程：先關分頁，agent 收到掛斷訊號（SIGHUP）自己收尾；5 秒內沒結束就補送 SIGTERM，再等 5 秒；仍沒結束就回報「已送出結束訊號，程序還沒結束」，不強制結束執行中的程序。找不到分頁時直接送 SIGTERM。實測 Claude Code 收到 SIGHUP 或 SIGTERM 約 2.5 秒結束，效果與 `/exit` 相同：登記檔與通訊 socket 刪除、MCP 子程序一起結束、印出 `claude --resume <id>`；Codex 收到 SIGTERM 時本體與外層的 node 包裝都會結束。
 - 不能替我打 `/exit`：WSL 核心關閉了 TIOCSTI（`dev.tty.legacy_tiocsti = 0`），Windows Terminal 也沒有送文字到分頁的指令，所以用訊號。
 - 先關分頁、不先送 SIGTERM：agent 一結束，分頁標題就變回 shell 的標題，之後就認不出是哪個分頁了。
 - Windows Terminal：以 UI Automation 找第一個視窗裡標題符合的分頁（比對規則同跳轉），必須剛好一個符合；按它的「關閉索引標籤」鈕（AutomationId 為 `CloseButton`），按之前再確認那個位置的標題沒變。整個分頁會關，分割出來的其他窗格也一起關，這個風險接受（沒顯示的分頁看不到裡面有幾個窗格）。關分頁不會跳確認視窗。
-- Ghostty：以 AppleScript 的 `close` 關掉 agent 所在的那個終端機，分頁只剩它時連分頁一起關，其他窗格不受影響；`close` 不跳確認視窗。1.4 起終端機有 `tty` 屬性，以 agent 程序的控制終端機精準對應；1.3 沒有這個屬性，改用資料夾與標題比對，必須剛好一個符合。Ghostty 回報不支援時改試 Windows Terminal，順序同跳轉。
+- Ghostty：以 AppleScript 的 `close` 關掉 agent 所在的那個終端機，分頁只剩它時連分頁一起關，其他窗格不受影響；`close` 不跳確認視窗。1.4 起終端機有 `tty` 屬性，以 agent 程序的控制終端機精準對應；1.3 沒有這個屬性，改用資料夾與標題比對，必須剛好一個符合，而且標題規則比跳轉嚴格、與 Windows Terminal 相同並分大小寫（Claude Code 的標題在狀態符號之後必須剛好是名稱），否則目標不在 Ghostty 裡時，「login」會關到同資料夾的「fix login」。Ghostty 回報不支援時改試 Windows Terminal，順序同跳轉。
 - 找不到分頁（session 沒有名稱、同名分頁不只一個、不在第一個 Windows Terminal 視窗、沒有支援的終端機）時只結束 agent，提示「已結束，但找不到它的分頁，分頁沒有關」。
-- 被 Ctrl+Z 暫停的程序收不到 SIGTERM（恢復執行後也會馬上再停下來），所以同一個 session 的暫停中程序一律以 SIGKILL 結束；它的 MCP 子程序會跟著結束，登記檔會留下，但它的程序已不存在，看板不會再顯示。
+- 被 Ctrl+Z 暫停的程序收不到 SIGTERM（恢復執行後也會馬上再停下來），所以同一個 session 的暫停中程序一律以 SIGKILL 結束，並確認它們也結束了才算 `ended`；session 只剩暫停中的程序時，一樣先關它的分頁。它的 MCP 子程序會跟著結束，登記檔會留下，但它的程序已不存在，看板不會再顯示。
 - 只動確實是那個 agent 的程序：pid 由伺服器自己查（Claude Code 取登記檔，Codex 取 `ps`），程式名稱（argv[0] 的最後一段）必須是 `claude` 或 `codex`；每次送訊號前確認啟動時間沒變，pid 被系統給了別的程式時不送。Linux 從 `/proc` 讀，macOS 用 `/bin/ps`。
 - Codex：以 `codex resume <id>` 開的程序直接對應；沒帶 id 的程序只有在資料夾裡只有一個時才知道是它，好幾個時拒絕（409「同一個資料夾開了多個 Codex，分不出是哪一個，請到分頁裡結束」），分頁與程序都不動。
 - 關閉成功後立刻重新整理清單；結果與失敗原因顯示在頁面頂端的提示列（與跳轉失敗相同），因為成功時卡片已經不在了。
@@ -315,6 +315,6 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - **風險**：`GET /api/live` 與兩個 POST 都要求 Host 是本機位址，所以即使用 `HOST` 把網站改綁到非本機位址，也只能用 localhost 或 127.0.0.1 這類名稱連進來讀取；區網用法不在這次範圍。
 - **AppleScript 的坑**：在 Ghostty 的 `tell` 區塊裡，`tab` 指的是它的 tab 類別，會被轉成「tab」這個字而不是定位字元；分隔符號要在區塊外先定義。假的 osascript 測不出這種問題，所以保留一個要真的 Ghostty 才能跑的測試：`cargo test -- --ignored real_ghostty`。
 - **程式碼審查**：`/mattpocock-skills:code-review` 的發現已處理，細節見 commit 訊息；刻意不做的是把 agent 與 status 改成 enum（目前只有兩種 agent，之後有第三種再做）。Windows Terminal 那一輪（Standards 8 項、Spec 5 項）全部處理：兩個行為問題見 commit c84c7d2，結構與註解見 e8f2815，規格文字見本檔。
-- **Ghostty 關閉尚未實測**：這台開發機是 WSL，沒有 Ghostty；`close` 與 `tty` 是依 Ghostty 原始碼（1.3 加入 `close`，1.4 加入 `tty`）寫的，自動測試只驗證送出的參數。要在 Mac 上手動試一次。
+- **macOS 上的關閉尚未實測**：這台開發機是 WSL。Ghostty 的 `close` 與 `tty` 是依 Ghostty 原始碼（1.3 加入 `close`，1.4 加入 `tty`）寫的，自動測試只驗證送出的參數；macOS 查程序現況用 `/bin/ps -o stat=,tty=,lstart=,args=`，自動測試走的是 Linux 的 `/proc`，也沒在 macOS 跑過（關閉的每一條路都會用到，包括只送 SIGTERM）。要在 Mac 上手動試一次。
 - **終端機的程式結構**：`terminal` 模組放兩種終端機共用的型別與「先 Ghostty、再 Windows Terminal」的切換順序；`ghostty`、`windows_terminal` 各自只處理自己那一種。
 - **工作單拆分建議**：先做 Claude Code 的清單與卡片（含跳轉），再加 Codex，最後做「最近結束」與接續，每一段都能獨立驗證。

@@ -126,12 +126,12 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
             candidates
         };
         // 資料夾裡只有一個程序時才知道是它；好幾個時對話與程序對不起來
-        let known = if count == 1 { pids } else { Vec::new() };
+        let pids = if count == 1 { pids } else { Vec::new() };
         open.extend(
             chosen
                 .into_iter()
                 .take(count)
-                .map(|thread| (thread, known.clone())),
+                .map(|thread| (thread, pids.clone())),
         );
     }
     open.into_iter()

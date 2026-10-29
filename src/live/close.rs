@@ -2,7 +2,7 @@
 //! 沒結束才補送 SIGTERM；被 Ctrl+Z 暫停的舊程序收不到訊號，直接強制結束。
 
 use super::{
-    process::{self, Signal, Snapshot},
+    process::{self, Info, Signal},
     terminal, LiveSession,
 };
 use std::time::Duration;
@@ -34,35 +34,38 @@ pub fn close(copies: &[LiveSession]) -> Result<Closed, Refusal> {
         return Err(Refusal::CannotTell);
     }
     // 只動確實是這個 agent 的程序：登記檔裡的 pid 可能已經被系統給了別的程式
-    let (stopped, running): (Vec<Snapshot>, Vec<Snapshot>) = copies
+    let (stopped, running): (Vec<Info>, Vec<Info>) = copies
         .iter()
         .flat_map(|copy| &copy.pids)
-        .filter_map(|pid| Some((*pid, process::inspect(*pid)?)))
-        .filter(|(_, info)| info.program == target.agent)
-        .partition(|(_, info)| info.stopped);
+        .filter_map(|pid| process::inspect(*pid))
+        .filter(|info| info.program == target.agent)
+        .partition(|info| info.stopped);
     if stopped.is_empty() && running.is_empty() {
         return Err(Refusal::Missing);
     }
 
+    // 只剩暫停中的程序時，分頁一樣要關
     let tab_closed = running
         .first()
-        .is_some_and(|(_, info)| terminal::close(target, info.tty.as_deref()));
+        .or(stopped.first())
+        .is_some_and(|info| terminal::close(target, info.tty.as_deref()));
     let mut remaining = if tab_closed {
         process::wait_until_ended(running, WAIT)
     } else {
         running
     };
     if !remaining.is_empty() {
-        for (pid, info) in &remaining {
-            process::signal(*pid, info, Signal::Term);
+        for info in &remaining {
+            process::signal(info, Signal::Term);
         }
         remaining = process::wait_until_ended(remaining, WAIT);
     }
-    for (pid, info) in &stopped {
-        process::signal(*pid, info, Signal::Kill);
+    for info in &stopped {
+        process::signal(info, Signal::Kill);
     }
+    let unkilled = process::wait_until_ended(stopped, WAIT);
     Ok(Closed {
-        ended: remaining.is_empty(),
+        ended: remaining.is_empty() && unkilled.is_empty(),
         tab_closed,
     })
 }
