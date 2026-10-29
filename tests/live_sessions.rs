@@ -810,7 +810,45 @@ async fn card_shows_the_context_size_sent_with_the_last_reply() {
     ])
     .await;
 
-    assert_eq!(server.live().await["live"][0]["context"], 120_002);
+    assert_eq!(
+        server.live().await["live"][0]["context"],
+        json!({"tokens":120_002,"justCompacted":false})
+    );
+}
+
+/// 對話被壓縮時寫進紀錄的分界：壓縮前與壓縮後的 token 數。
+fn compact_boundary(timestamp: &str, before: u64, after: u64) -> Value {
+    json!({"type":"system","subtype":"compact_boundary","timestamp":timestamp,"compactMetadata":{"trigger":"auto","preTokens":before,"postTokens":after}})
+}
+
+#[tokio::test]
+async fn right_after_compaction_the_card_says_so_until_the_next_reply() {
+    let compacted = [
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        reply_with_usage("2026-10-23T08:00:09.000Z", 2, 7_000, 333_000),
+        compact_boundary("2026-10-23T08:01:00.000Z", 341_391, 23_488),
+        compact_summary("2026-10-23T08:01:00.000Z"),
+    ];
+    let waiting = server_with_transcript(&compacted).await;
+    let mut replied = compacted.to_vec();
+    replied.push(typed("繼續", "2026-10-23T08:02:00.000Z"));
+    replied.push(reply_with_usage(
+        "2026-10-23T08:02:09.000Z",
+        2,
+        60_000,
+        30_000,
+    ));
+    let replied = server_with_transcript(&replied).await;
+
+    // 壓縮記下的 23,488 比下一次實際送出的少很多，不拿來顯示
+    assert_eq!(
+        waiting.live().await["live"][0]["context"],
+        json!({"tokens":341_391,"justCompacted":true})
+    );
+    assert_eq!(
+        replied.live().await["live"][0]["context"],
+        json!({"tokens":90_002,"justCompacted":false})
+    );
 }
 
 #[tokio::test]
@@ -1648,7 +1686,10 @@ async fn codex_card_shows_the_context_size_of_the_last_request() {
     ])
     .await;
 
-    assert_eq!(server.live().await["live"][0]["context"], 155_263);
+    assert_eq!(
+        server.live().await["live"][0]["context"],
+        json!({"tokens":155_263,"justCompacted":false})
+    );
 }
 
 #[tokio::test]

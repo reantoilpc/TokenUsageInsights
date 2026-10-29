@@ -108,8 +108,9 @@ function renderMeta(session) {
   const meta = element('div', 'live-card-meta');
   const parts = [session.name ? session.folder : null, AGENT_TAG[session.agent]].filter(Boolean);
   if (session.context) {
-    const context = element('span', 'live-card-context', contextLabel(session.context));
-    context.title = '最後一次送出的 context 大小';
+    const { text, title } = contextLabel(session.context);
+    const context = element('span', 'live-card-context', text);
+    context.title = title;
     parts.push(context);
   }
   parts.forEach((part, index) => {

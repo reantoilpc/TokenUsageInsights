@@ -120,6 +120,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 54. 身為開發者，我不想在最後一行看到對話被壓縮時 Claude Code 自動寫的摘要（This session is being continued…），那不是我打的字。
 55. 身為開發者，我不想同一個 session 出現兩張一樣的卡片（例如以 Ctrl+Z 暫停後，又在同一個分頁接續）。
 56. 身為開發者，我想讓閒置的卡片不寫「閒置」兩個字、最後一行不出現 `[Image #2]` 這種佔位字，讓卡片只留有用的資訊，標題也比較常一行放得下。
+57. 身為開發者，我想在 session 剛壓縮完時，卡片不要還顯示壓縮前的大數字，以免以為它又快要被壓縮了。
 
 ## Implementation Decisions
 
@@ -207,8 +208,9 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 
 - 副標依序是：資料夾（有標題時才放，沒有標題時標題本身就是資料夾）、「Codex」（只標 Codex，Claude Code 不標）、context 大小，以「 · 」分隔。「最近結束」同樣只標 Codex。
 - 狀態文字：等你回覆與工作中顯示「● 狀態」；閒置是預設狀態，畫面上只用左邊框的顏色，文字以視覺隱藏的方式留給螢幕閱讀器，卡片的提示文字也寫出狀態。
-- context 大小：Claude Code 取最後一則主對話（不含子 agent）助理回覆的 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，三者加總為 0 的回覆（中斷時補上的訊息，沒有真的呼叫模型）略過。Codex 取最後一筆 `token_count` 的 `last_token_usage.input_tokens`（已含快取的部分），`info` 是 null 的略過。只在「進行中」顯示，還沒有回覆時不顯示。
+- context 大小（API 回傳 `{tokens, justCompacted}`）：Claude Code 取最後一則主對話（不含子 agent）助理回覆的 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，三者加總為 0 的回覆（中斷時補上的訊息，沒有真的呼叫模型）略過。Codex 取最後一筆 `token_count` 的 `last_token_usage.input_tokens`（已含快取的部分），`info` 是 null 的略過。只在「進行中」顯示，還沒有回覆時不顯示。
 - context 的格式：`context 121K`，千位取整數；999,500 起寫成一位小數的 M（例如 `1.2M`），避免四捨五入出「1000K」。一律灰色、不設門檻，滑鼠停留時說明「最後一次送出的 context 大小」。Claude Code 的紀錄沒有 context 上限，門檻只能用猜的；Codex 雖有 `model_context_window`，為了兩邊一致也不算百分比。
+- 剛壓縮：Claude Code 的紀錄在最後一次回覆之後有壓縮分界（`compact_boundary`）時，副標寫「context 剛壓縮」、不寫數字，滑鼠停留時說明「壓縮前 341K，下一次回覆後顯示新的大小」；下一次回覆後恢復顯示數字。壓縮分界記有壓縮前與壓縮後的 token 數，但壓縮後的數字不含每次請求都會帶的部分：本機 46 次壓縮中，壓縮後記下 2.2 萬～3.3 萬，下一次回覆實際送出 8.4 萬～10.8 萬，每次差 5.6 萬～7.8 萬，所以不拿來顯示；壓縮前的數字與壓縮前最後一次回覆只差 0.1 萬～0.4 萬，用它說明壓縮前的大小。Codex 不做這項。
 - 同一個 `agent:id` 有多個程序時只回一筆，取登記檔更新時間最新的那個（正在用的），跳轉也照它的資料找分頁。實際碰過的情況：在同一個分頁以 Ctrl+Z 暫停 `claude`，再 `claude --resume` 同一個 id，暫停中的程序 `kill(pid, 0)` 一樣會成功，兩筆登記都算還開著。
 - 刻意不放上卡片：模型與權限模式（各 session 幾乎都一樣）；git 分支（紀錄的是整個資料夾當時所在的分支，同一個資料夾的 session 會顯示同一個，容易誤以為是那個 session 自己的分支）；壓縮次數（要每次掃整份紀錄）；recap 的翻譯（Claude Code 有時用英文寫，翻譯要呼叫模型）。
 
@@ -257,7 +259,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 解析邏輯先不另外加單元測試層；若實作時發現某個邊界情況透過 HTTP 接縫太難測，再補。
 - 改名的名稱驗證是純前端邏輯：`static/rename-utils.js` 的 `renameCommand`，比照既有的前端工具以 `npm test` 測試。對話框、剪貼簿、跳轉與 ✎ 的停用規則以瀏覽器手動確認（攔下 POST，避免切換真正的分頁）。
 - 釘選的排序、切換與清理是純前端邏輯：`static/pin-utils.js`，比照 `rename-utils.js` 以 `npm test` 測試。📌 的外觀、點擊不觸發跳轉、重新整理後保留與 localStorage 失效時的行為以瀏覽器手動確認。
-- 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）、重複程序合併，都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
+- 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）與剛壓縮的標示、重複程序合併，都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
 
 ## Out of Scope
 
@@ -270,7 +272,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 多語系介面、README 與 CHANGELOG 更新、發版。
 - 全自動改名（模擬鍵盤、AppleScript 送字或直接改 Claude Code 的檔案）；Codex 與「最近結束」的改名。
 - 釘選的拖曳排序、跨瀏覽器同步，以及「最近結束」的釘選。
-- 卡片上的模型、權限模式、git 分支與壓縮次數；context 大小的變色提醒與百分比；recap 的翻譯。
+- 卡片上的模型、權限模式、git 分支與壓縮次數；context 大小的變色提醒與百分比；Codex 的「剛壓縮」標示；recap 的翻譯。
 - 鍵盤快捷鍵（1–9 跳轉）、桌面通知。
 - 把即時狀態存進資料庫、歷史分析。
 - 修改原本的 `/sync` 等端點的安全性。

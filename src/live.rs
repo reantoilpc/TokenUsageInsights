@@ -43,8 +43,8 @@ struct LiveSession {
     recap: Option<String>,
     /// 待辦清單進度；沒有清單時為 null。
     progress: Option<transcript::Progress>,
-    /// 最後一次回覆時送出的 context 大小（token 數）；還沒有回覆時為 null。
-    context: Option<u64>,
+    /// 最後一次回覆時送出的 context 大小；還沒有回覆時為 null。
+    context: Option<transcript::Context>,
 }
 
 /// 最近結束的 session（已經沒有程序，資料取自對話紀錄）。

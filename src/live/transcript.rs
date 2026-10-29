@@ -44,6 +44,15 @@ pub struct Progress {
     pub current: Option<String>,
 }
 
+/// context 大小：最後一次回覆時送出的 token 數。
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Context {
+    pub tokens: u64,
+    /// 最後一次回覆之後剛壓縮過：`tokens` 是壓縮前的大小，下一次回覆才知道新的大小。
+    pub just_compacted: bool,
+}
+
 #[derive(Clone, Default)]
 pub struct Transcript {
     pub last_prompt: Option<Prompt>,
@@ -62,8 +71,7 @@ pub struct Transcript {
     pub cwd: Option<String>,
     /// 以 `claude -p` 這類背景方式執行的對話。
     pub background: bool,
-    /// 最後一次回覆時送出的 context 大小（token 數）。
-    pub context: Option<u64>,
+    pub context: Option<Context>,
 }
 
 /// 逐行掃描一份紀錄：Claude Code 與 Codex 的格式不同，各自提供。
@@ -169,12 +177,14 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_title = line.contains("customTitle") || line.contains("aiTitle");
         let maybe_recap = line.contains("away_summary");
         let maybe_usage = line.contains("\"usage\"");
+        let maybe_compact = line.contains("compact_boundary");
         if !maybe_prompt
             && !maybe_todos
             && !maybe_ask
             && !maybe_title
             && !maybe_recap
             && !maybe_usage
+            && !maybe_compact
         {
             continue;
         }
@@ -212,7 +222,21 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
             found.progress = Some(progress);
         }
         if let Some(tokens) = context_tokens(&entry) {
-            found.context = Some(tokens);
+            found.context = Some(Context {
+                tokens,
+                just_compacted: false,
+            });
+        }
+        if entry["subtype"] == "compact_boundary" {
+            // 壓縮時記下的壓縮後大小不含每次請求都會帶的部分，比下一次實際送出的少 5～8 萬，
+            // 所以不拿來顯示，只標出剛壓縮過，並留著壓縮前的大小
+            found.context = entry["compactMetadata"]["preTokens"]
+                .as_u64()
+                .or(found.context.map(|context| context.tokens))
+                .map(|tokens| Context {
+                    tokens,
+                    just_compacted: true,
+                });
         }
         track_questions(&entry, &mut unanswered);
     }
