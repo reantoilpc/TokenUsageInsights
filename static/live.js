@@ -1,6 +1,7 @@
 // 「進行中」頁面：每 3 秒向後端取一次資料；頁面不可見時暫停，回到可見時立即更新。
 import { renameCommand } from './rename-utils.js';
 import { orderByPins, parsePins, pinKey, prunePins, togglePin } from './pin-utils.js';
+import { contextLabel } from './context-utils.js';
 
 const POLL_MS = 3000;
 let timer = null;
@@ -46,7 +47,8 @@ async function focusSession(session) {
   if (!result.ok) notify(result.message);
 }
 
-const AGENT_LABEL = { claude: 'Claude Code', codex: 'Codex' };
+// 幾乎都是 Claude Code，每張都寫就成了雜訊：只標出 Codex
+const AGENT_TAG = { codex: 'Codex' };
 const STATUS_LABEL = { waiting: '等你回覆', working: '工作中', idle: '閒置' };
 
 function element(tag, className, text) {
@@ -69,7 +71,8 @@ function renderCard(session, pinned) {
   card.dataset.key = `${session.agent}:${session.id}`;
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
-  card.title = '跳到這個 session 的終端機分頁';
+  const state = STATUS_LABEL[session.status] || session.status;
+  card.title = `${state} · 跳到這個 session 的終端機分頁`;
   card.addEventListener('click', () => focusSession(session));
   card.addEventListener('keydown', (event) => {
     if (event.target !== card) return; // 卡片裡的 ✎、📌 按鈕自己處理
@@ -80,12 +83,14 @@ function renderCard(session, pinned) {
   });
   const head = element('div', 'live-card-head');
   const side = element('span', 'live-card-side');
-  side.append(element('span', 'live-card-state', `● ${STATUS_LABEL[session.status] || session.status}`));
+  // 閒置時這段字只留給螢幕閱讀器（見 live.css），畫面上靠左邊框的顏色表示
+  side.append(element('span', 'live-card-state', `● ${state}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
   side.append(renderPinButton(session, pinned));
   head.append(element('span', 'live-card-title', session.name || session.folder), side);
-  const meta = [session.name ? session.folder : null, AGENT_LABEL[session.agent] || session.agent];
-  card.append(head, element('div', 'live-card-meta', meta.filter(Boolean).join(' · ')));
+  card.append(head);
+  const meta = renderMeta(session);
+  if (meta.hasChildNodes()) card.append(meta);
   if (session.progress) card.append(renderProgress(session.progress));
   // Claude Code 在我離開時寫的 recap：來自對話紀錄，一樣只用 textContent
   if (session.recap) card.append(element('div', 'live-card-recap', session.recap));
@@ -97,6 +102,21 @@ function renderCard(session, pinned) {
     card.append(foot);
   }
   return card;
+}
+
+function renderMeta(session) {
+  const meta = element('div', 'live-card-meta');
+  const parts = [session.name ? session.folder : null, AGENT_TAG[session.agent]].filter(Boolean);
+  if (session.context) {
+    const context = element('span', 'live-card-context', contextLabel(session.context));
+    context.title = '最後一次送出的 context 大小';
+    parts.push(context);
+  }
+  parts.forEach((part, index) => {
+    if (index > 0) meta.append(' · ');
+    meta.append(part);
+  });
+  return meta;
 }
 
 // 釘選存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的清單互相蓋掉
@@ -249,7 +269,7 @@ function renderRecent(item) {
   resume.addEventListener('click', () => resumeSession(item));
   row.append(
     head,
-    element('div', 'live-card-meta', `${item.folder} · ${AGENT_LABEL[item.agent] || item.agent}`),
+    element('div', 'live-card-meta', [item.folder, AGENT_TAG[item.agent]].filter(Boolean).join(' · ')),
     foot,
     resume,
   );
