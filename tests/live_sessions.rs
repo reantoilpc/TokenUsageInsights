@@ -772,8 +772,16 @@ async fn pasted_image_placeholders_are_dropped_and_a_picture_alone_reads_as_a_pi
         (pasted(json!([{"type":"image"}])), "（圖片）"),
         // 不是「#數字」的方括號是人自己打的字，保留
         (
-            typed("[Image #x] 照原樣", "2026-10-23T08:00:00.000Z"),
+            pasted(json!([{"type":"text","text":"[Image #x] 照原樣"},{"type":"image"}])),
             "[Image #x] 照原樣",
+        ),
+        // 沒附圖時，佔位字的樣子也是人自己打的（例如 shell 指令的參數）
+        (
+            typed(
+                "<bash-input>echo [Image #1]</bash-input>",
+                "2026-10-23T08:00:00.000Z",
+            ),
+            "! echo [Image #1]",
         ),
     ] {
         let server = server_with_transcript(&[message]).await;
@@ -819,7 +827,7 @@ async fn context_size_appears_only_on_open_sessions_that_have_a_reply() {
 
     let live = server.live().await;
 
-    assert_eq!(live["live"][0]["context"], Value::Null);
+    assert_eq!(live["live"][0].get("context"), Some(&Value::Null));
     assert_eq!(live["recent"][0]["id"], "s-done");
     assert_eq!(live["recent"][0].get("context"), None);
 }

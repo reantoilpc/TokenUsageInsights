@@ -83,7 +83,7 @@ function renderCard(session, pinned) {
   });
   const head = element('div', 'live-card-head');
   const side = element('span', 'live-card-side');
-  // 閒置時這段字只留給螢幕閱讀器（見 live.css），畫面上靠左邊框的顏色表示
+  // 閒置時只留給螢幕閱讀器，見 live.css
   side.append(element('span', 'live-card-state', `● ${state}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
   side.append(renderPinButton(session, pinned));

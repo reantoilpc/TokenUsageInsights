@@ -142,7 +142,7 @@ fn parse(path: &Path, len: u64, scanner: &Scanner, previous: Transcript) -> Tran
     found.background |= previous.background;
     let missing = found.last_prompt.is_none() || (scanner.tracks_turns && found.running.is_none());
     if start > 0 && missing && file.seek(SeekFrom::Start(0)).is_ok() {
-        // 還是找不到（第一次讀一份很長的紀錄）：回頭掃整份檔案，只取指令與回合狀態。
+        // 還是找不到（第一次讀一份很長的紀錄）：回頭掃整份檔案，只取指令、回合狀態與 context 大小。
         // ponytail: 待辦進度不回頭找；每次檔案變動都掃整檔太貴，尾端看過一次之後就會沿用
         let mut lines = BufReader::new(file)
             .split(b'\n')
@@ -151,6 +151,7 @@ fn parse(path: &Path, len: u64, scanner: &Scanner, previous: Transcript) -> Tran
         let full = (scanner.scan)(&mut lines);
         found.last_prompt = found.last_prompt.or(full.last_prompt);
         found.running = found.running.or(full.running);
+        found.context = found.context.or(full.context);
     }
     found.progress = found.progress.filter(|progress| progress.total > 0);
     found
@@ -267,7 +268,7 @@ fn todo_progress(entry: &Value) -> Option<Progress> {
     })
 }
 
-/// 一次回覆實際送出的 context 大小：輸入加上寫入與讀取快取的 token 數。
+/// 一次回覆實際送出的 context 大小。
 fn context_tokens(entry: &Value) -> Option<u64> {
     if entry["type"] != "assistant" || entry["isSidechain"] == true {
         return None;
@@ -311,7 +312,12 @@ fn typed_text(entry: &Value) -> Option<String> {
         }
         _ => return None,
     };
-    let text = without_image_placeholders(&text);
+    // 佔位字只在真的附了圖時才是 Claude Code 加的；沒附圖時是人自己打的字（例如 shell 指令）
+    let text = if has_image {
+        without_image_placeholders(&text)
+    } else {
+        text
+    };
     let text = text.trim();
     if text.is_empty() {
         return has_image.then(|| "（圖片）".to_string());
