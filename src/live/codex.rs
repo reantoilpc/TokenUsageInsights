@@ -3,7 +3,7 @@
 
 use super::{
     ghostty,
-    transcript::{self, timestamp_ms, Progress, Prompt, Scanner, Transcript},
+    transcript::{self, timestamp_ms, Context, Progress, Prompt, Scanner, Transcript},
     EndedSession, LiveSession,
 };
 use rusqlite::{Connection, OpenFlags};
@@ -176,7 +176,10 @@ fn codex_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
             (Some("event_msg"), Some("token_count")) => {
                 let usage = &entry["payload"]["info"]["last_token_usage"];
                 if let Some(tokens) = usage["input_tokens"].as_u64() {
-                    found.context = Some(tokens);
+                    found.context = Some(Context {
+                        tokens,
+                        just_compacted: false,
+                    });
                 }
             }
             (Some("response_item"), Some("function_call")) => {
