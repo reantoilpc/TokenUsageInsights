@@ -43,6 +43,8 @@ struct LiveSession {
     recap: Option<String>,
     /// 待辦清單進度；沒有清單時為 null。
     progress: Option<transcript::Progress>,
+    /// 最後一次回覆時送出的 context 大小（token 數）；還沒有回覆時為 null。
+    context: Option<u64>,
 }
 
 /// 最近結束的 session（已經沒有程序，資料取自對話紀錄）。
@@ -94,11 +96,13 @@ pub async fn get_live(headers: HeaderMap) -> Response {
 fn live_sessions() -> Vec<LiveSession> {
     let mut sessions = claude::sessions(&crate::db::get_claude_dir());
     sessions.extend(codex::sessions(&crate::db::get_codex_dir()));
-    sessions.sort_by(|a, b| {
-        status_rank(a.status)
-            .cmp(&status_rank(b.status))
-            .then(b.updated_at.cmp(&a.updated_at))
-    });
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    // 同一個 session 可能有兩個程序（例如 Ctrl+Z 暫停後又在同一個分頁接續），只留最近
+    // 更新的那個：那是正在用的，跳轉也照它的資料找分頁
+    let mut seen = HashSet::new();
+    sessions.retain(|session| seen.insert((session.agent, session.id.clone())));
+    // 穩定排序：同一種狀態內維持最近有動靜的在前
+    sessions.sort_by_key(|session| status_rank(session.status));
     sessions
 }
 

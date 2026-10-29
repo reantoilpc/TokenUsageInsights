@@ -91,6 +91,7 @@ fn into_live_session(registered: Registered, claude_dir: &Path) -> Option<LiveSe
             })
             .map(|recap| recap.text),
         progress: transcript.progress,
+        context: transcript.context,
     })
 }
 

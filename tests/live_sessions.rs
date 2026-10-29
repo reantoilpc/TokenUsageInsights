@@ -583,6 +583,21 @@ async fn live_sessions_are_ordered_by_status_then_most_recent_activity() {
     assert_eq!(ids, vec!["shell-new", "busy-old", "idle-new", "idle-old"]);
 }
 
+#[tokio::test]
+async fn a_session_with_two_processes_shows_one_card_from_the_most_recently_updated() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let (suspended, resumed) = (server.alive_pid(), server.alive_pid());
+    // Ctrl+Z 暫停的程序還留著登記檔，同一個 session 又在同一個分頁接續起來
+    server.claude_session(suspended, registered("s-1", "/work/erp", "busy", 1000));
+    server.claude_session(resumed, registered("s-1", "/work/erp", "idle", 2000));
+
+    let live = server.live().await;
+
+    let items = live["live"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["status"], "idle");
+}
+
 fn typed(text: &str, timestamp: &str) -> Value {
     json!({"type":"user","timestamp":timestamp,"message":{"role":"user","content":text}})
 }
@@ -716,6 +731,105 @@ async fn shell_commands_slash_commands_and_pasted_images_count_as_typed() {
     let with_image = json!({"type":"user","timestamp":"2026-10-23T08:00:00.000Z","message":{"role":"user","content":[{"type":"image"},{"type":"text","text":"看這張圖"}]}});
     let server = server_with_transcript(&[with_image]).await;
     assert_eq!(server.live().await["live"][0]["lastPrompt"], "看這張圖");
+}
+
+/// 對話被壓縮後，Claude Code 以使用者訊息的形式寫進紀錄的摘要。
+fn compact_summary(timestamp: &str) -> Value {
+    json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"timestamp":timestamp,"cwd":"/work/erp","entrypoint":"cli","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}})
+}
+
+#[tokio::test]
+async fn the_summary_written_when_a_conversation_is_compacted_is_not_an_instruction() {
+    let server = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        reply("2026-10-23T08:00:09.000Z"),
+        compact_summary("2026-10-23T09:00:00.000Z"),
+    ])
+    .await;
+    let mut ended = finished_conversation("s-done", "/work/erp", "修好註冊頁", None);
+    ended.push(compact_summary("2026-10-23T09:00:00.000Z"));
+    server.aged_transcript("-work-erp", "s-done", &ended, 2 * HOUR);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0]["lastPrompt"], "幫我修好登入頁");
+    assert_eq!(live["live"][0]["promptAt"], 1792742400000u64);
+    assert_eq!(live["recent"][0]["lastPrompt"], "修好註冊頁");
+}
+
+#[tokio::test]
+async fn pasted_image_placeholders_are_dropped_and_a_picture_alone_reads_as_a_picture() {
+    let pasted = |parts: Value| json!({"type":"user","timestamp":"2026-10-23T08:00:00.000Z","message":{"role":"user","content":parts}});
+    for (message, expected) in [
+        (
+            pasted(json!([{"type":"text","text":"[Image #2]\n看這張圖"},{"type":"image"}])),
+            "看這張圖",
+        ),
+        (
+            pasted(json!([{"type":"text","text":"[Image #1]"},{"type":"image"}])),
+            "（圖片）",
+        ),
+        (pasted(json!([{"type":"image"}])), "（圖片）"),
+        // 不是「#數字」的方括號是人自己打的字，保留
+        (
+            pasted(json!([{"type":"text","text":"[Image #x] 照原樣"},{"type":"image"}])),
+            "[Image #x] 照原樣",
+        ),
+        // 沒附圖時，佔位字的樣子也是人自己打的（例如 shell 指令的參數）
+        (
+            typed(
+                "<bash-input>echo [Image #1]</bash-input>",
+                "2026-10-23T08:00:00.000Z",
+            ),
+            "! echo [Image #1]",
+        ),
+    ] {
+        let server = server_with_transcript(&[message]).await;
+
+        assert_eq!(server.live().await["live"][0]["lastPrompt"], expected);
+    }
+}
+
+/// 附上用量的助理回覆：輸入、寫入快取、讀取快取的 token 數。
+fn reply_with_usage(timestamp: &str, input: u64, created: u64, cached: u64) -> Value {
+    json!({"type":"assistant","timestamp":timestamp,"message":{"role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"好的"}],"usage":{"input_tokens":input,"cache_creation_input_tokens":created,"cache_read_input_tokens":cached,"output_tokens":800}}})
+}
+
+#[tokio::test]
+async fn card_shows_the_context_size_sent_with_the_last_reply() {
+    // 中斷時補上的訊息沒有真的呼叫模型，用量全是 0
+    let synthetic = json!({"type":"assistant","timestamp":"2026-10-23T08:02:00.000Z","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"No response requested."}],"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}});
+    let mut subagent = reply_with_usage("2026-10-23T08:03:00.000Z", 5, 0, 900_000);
+    subagent["isSidechain"] = json!(true);
+    let server = server_with_transcript(&[
+        typed("幫我修好登入頁", "2026-10-23T08:00:00.000Z"),
+        reply_with_usage("2026-10-23T08:00:09.000Z", 3, 2_000, 50_000),
+        reply_with_usage("2026-10-23T08:01:00.000Z", 2, 7_000, 113_000),
+        synthetic,
+        subagent,
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["context"], 120_002);
+}
+
+#[tokio::test]
+async fn context_size_appears_only_on_open_sessions_that_have_a_reply() {
+    let server = server_with_transcript(&[typed("你好", "2026-10-23T08:00:00.000Z")]).await;
+    let mut ended = finished_conversation("s-done", "/work/erp", "修好註冊頁", None);
+    ended.push(reply_with_usage(
+        "2026-10-23T08:01:00.000Z",
+        2,
+        7_000,
+        113_000,
+    ));
+    server.aged_transcript("-work-erp", "s-done", &ended, 2 * HOUR);
+
+    let live = server.live().await;
+
+    assert_eq!(live["live"][0].get("context"), Some(&Value::Null));
+    assert_eq!(live["recent"][0]["id"], "s-done");
+    assert_eq!(live["recent"][0].get("context"), None);
 }
 
 #[tokio::test]
@@ -1514,6 +1628,27 @@ async fn a_codex_session_without_a_plan_has_no_progress() {
     let server =
         server_with_codex_rollout(&[codex_user_item("2026-10-23T08:00:00.000Z", "隨便問問")]).await;
     assert_eq!(server.live().await["live"][0]["progress"], Value::Null);
+}
+
+/// Codex 每次送出請求後記下的用量；回合剛開始時 info 可能是 null。
+fn codex_tokens(timestamp: &str, input: Option<u64>) -> Value {
+    let info = input.map_or(Value::Null, |input| {
+        json!({"last_token_usage":{"input_tokens":input,"cached_input_tokens":input / 2,"output_tokens":500,"total_tokens":input + 500},"model_context_window":258400})
+    });
+    codex_event(timestamp, json!({"type":"token_count","info":info}))
+}
+
+#[tokio::test]
+async fn codex_card_shows_the_context_size_of_the_last_request() {
+    let server = server_with_codex_rollout(&[
+        codex_user_item("2026-10-23T08:00:00.000Z", "做登入功能"),
+        codex_tokens("2026-10-23T08:00:05.000Z", Some(90_000)),
+        codex_tokens("2026-10-23T08:00:09.000Z", Some(155_263)),
+        codex_tokens("2026-10-23T08:01:00.000Z", None),
+    ])
+    .await;
+
+    assert_eq!(server.live().await["live"][0]["context"], 155_263);
 }
 
 #[tokio::test]

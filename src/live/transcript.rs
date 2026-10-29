@@ -62,6 +62,8 @@ pub struct Transcript {
     pub cwd: Option<String>,
     /// 以 `claude -p` 這類背景方式執行的對話。
     pub background: bool,
+    /// 最後一次回覆時送出的 context 大小（token 數）。
+    pub context: Option<u64>,
 }
 
 /// 逐行掃描一份紀錄：Claude Code 與 Codex 的格式不同，各自提供。
@@ -136,10 +138,11 @@ fn parse(path: &Path, len: u64, scanner: &Scanner, previous: Transcript) -> Tran
     found.ai_title = found.ai_title.or(previous.ai_title);
     found.recap = found.recap.or(previous.recap);
     found.cwd = found.cwd.or(previous.cwd);
+    found.context = found.context.or(previous.context);
     found.background |= previous.background;
     let missing = found.last_prompt.is_none() || (scanner.tracks_turns && found.running.is_none());
     if start > 0 && missing && file.seek(SeekFrom::Start(0)).is_ok() {
-        // 還是找不到（第一次讀一份很長的紀錄）：回頭掃整份檔案，只取指令與回合狀態。
+        // 還是找不到（第一次讀一份很長的紀錄）：回頭掃整份檔案，只取指令、回合狀態與 context 大小。
         // ponytail: 待辦進度不回頭找；每次檔案變動都掃整檔太貴，尾端看過一次之後就會沿用
         let mut lines = BufReader::new(file)
             .split(b'\n')
@@ -148,6 +151,7 @@ fn parse(path: &Path, len: u64, scanner: &Scanner, previous: Transcript) -> Tran
         let full = (scanner.scan)(&mut lines);
         found.last_prompt = found.last_prompt.or(full.last_prompt);
         found.running = found.running.or(full.running);
+        found.context = found.context.or(full.context);
     }
     found.progress = found.progress.filter(|progress| progress.total > 0);
     found
@@ -164,7 +168,14 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_ask = ASKING_TOOLS.iter().any(|tool| line.contains(tool));
         let maybe_title = line.contains("customTitle") || line.contains("aiTitle");
         let maybe_recap = line.contains("away_summary");
-        if !maybe_prompt && !maybe_todos && !maybe_ask && !maybe_title && !maybe_recap {
+        let maybe_usage = line.contains("\"usage\"");
+        if !maybe_prompt
+            && !maybe_todos
+            && !maybe_ask
+            && !maybe_title
+            && !maybe_recap
+            && !maybe_usage
+        {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
@@ -199,6 +210,9 @@ pub fn claude_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         }
         if let Some(progress) = todo_progress(&entry) {
             found.progress = Some(progress);
+        }
+        if let Some(tokens) = context_tokens(&entry) {
+            found.context = Some(tokens);
         }
         track_questions(&entry, &mut unanswered);
     }
@@ -254,13 +268,36 @@ fn todo_progress(entry: &Value) -> Option<Progress> {
     })
 }
 
-/// 只有「人自己打的字」才算指令：排除工具回傳、meta 訊息、子 agent、背景任務通知與指令輸出。
-fn typed_text(entry: &Value) -> Option<String> {
-    if entry["type"] != "user" || entry["isMeta"] == true || entry["isSidechain"] == true {
+/// 一次回覆實際送出的 context 大小。
+fn context_tokens(entry: &Value) -> Option<u64> {
+    if entry["type"] != "assistant" || entry["isSidechain"] == true {
         return None;
     }
-    let text = match &entry["message"]["content"] {
-        Value::String(text) => text.clone(),
+    let usage = &entry["message"]["usage"];
+    let tokens: u64 = [
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ]
+    .iter()
+    .filter_map(|field| usage[field].as_u64())
+    .sum();
+    // 沒有真的呼叫模型的回覆（例如中斷時補上的訊息）用量全是 0，不能蓋掉前一次的大小
+    (tokens > 0).then_some(tokens)
+}
+
+/// 只有「人自己打的字」才算指令：排除工具回傳、meta 訊息、壓縮後的摘要、子 agent、
+/// 背景任務通知與指令輸出。
+fn typed_text(entry: &Value) -> Option<String> {
+    if entry["type"] != "user"
+        || entry["isMeta"] == true
+        || entry["isSidechain"] == true
+        || entry["isCompactSummary"] == true
+    {
+        return None;
+    }
+    let (text, has_image) = match &entry["message"]["content"] {
+        Value::String(text) => (text.clone(), false),
         Value::Array(parts) => {
             if parts.iter().any(|part| part["type"] == "tool_result") {
                 return None;
@@ -270,13 +307,20 @@ fn typed_text(entry: &Value) -> Option<String> {
                 .filter(|part| part["type"] == "text")
                 .filter_map(|part| part["text"].as_str())
                 .collect();
-            texts.join("\n")
+            let has_image = parts.iter().any(|part| part["type"] == "image");
+            (texts.join("\n"), has_image)
         }
         _ => return None,
     };
+    // 佔位字只在真的附了圖時才是 Claude Code 加的；沒附圖時是人自己打的字（例如 shell 指令）
+    let text = if has_image {
+        without_image_placeholders(&text)
+    } else {
+        text
+    };
     let text = text.trim();
     if text.is_empty() {
-        return None;
+        return has_image.then(|| "（圖片）".to_string());
     }
     if text.starts_with('<') && !TYPED_TAGS.iter().any(|tag| text.starts_with(tag)) {
         return None;
@@ -294,6 +338,26 @@ fn display_text(text: &str) -> String {
         return format!("{} {args}", name.trim()).trim().to_string();
     }
     text.to_string()
+}
+
+/// 拿掉貼圖時 Claude Code 留在文字裡的 `[Image #2]` 佔位字。
+fn without_image_placeholders(text: &str) -> String {
+    const OPEN: &str = "[Image #";
+    let mut kept = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        let after = &rest[at + OPEN.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && after[digits..].starts_with(']') {
+            kept.push_str(&rest[..at]);
+            rest = &after[digits + 1..];
+        } else {
+            kept.push_str(&rest[..at + OPEN.len()]);
+            rest = after;
+        }
+    }
+    kept.push_str(rest);
+    kept
 }
 
 fn tag_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {

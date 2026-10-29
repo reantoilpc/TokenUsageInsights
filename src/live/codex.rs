@@ -145,6 +145,7 @@ fn into_live_session(thread: &Thread) -> LiveSession {
         prompt_at,
         recap: None, // Codex 沒有對應的資料
         progress: transcript.progress,
+        context: transcript.context,
     }
 }
 
@@ -159,7 +160,8 @@ fn codex_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
         let maybe_call = ["update_plan", "request_user_input_async"]
             .iter()
             .any(|name| line.contains(name));
-        if !maybe_turn && !maybe_prompt && !maybe_call {
+        let maybe_tokens = line.contains("token_count");
+        if !maybe_turn && !maybe_prompt && !maybe_call && !maybe_tokens {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(&line) else {
@@ -169,6 +171,13 @@ fn codex_scan(lines: &mut dyn Iterator<Item = String>) -> Transcript {
             (Some("event_msg"), Some("task_started")) => found.running = Some(true),
             (Some("event_msg"), Some("task_complete" | "turn_aborted")) => {
                 found.running = Some(false);
+            }
+            // 最後一次送出的輸入（已含快取的部分）；回合剛開始時 info 可能是 null
+            (Some("event_msg"), Some("token_count")) => {
+                let usage = &entry["payload"]["info"]["last_token_usage"];
+                if let Some(tokens) = usage["input_tokens"].as_u64() {
+                    found.context = Some(tokens);
+                }
             }
             (Some("response_item"), Some("function_call")) => {
                 match entry["payload"]["name"].as_str() {
