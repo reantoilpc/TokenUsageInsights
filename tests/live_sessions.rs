@@ -36,11 +36,22 @@ impl FakeCommands {
 
     fn write_script(&self, name: &str, stdout: &str, exit_code: i32) {
         fs::write(self.dir.join(format!("{name}.out")), stdout).unwrap();
+        self.scripted(
+            name,
+            &format!(
+                "cat '{dir}/{name}.out' 2>/dev/null\nexit {exit_code}",
+                dir = self.dir.display()
+            ),
+        );
+    }
+
+    /// 建立假指令 `name`：記錄參數後執行 `body`（sh 指令），給要依呼叫次序反應的情境用。
+    fn scripted(&self, name: &str, body: &str) {
         let path = self.dir.join(name);
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\n{{ for a in \"$@\"; do printf '%s\\037' \"$a\" | tr '\\n' ' '; done; echo; }} >> '{dir}/{name}.args'\ncat '{dir}/{name}.out' 2>/dev/null\nexit {exit_code}\n",
+                "#!/bin/sh\n{{ for a in \"$@\"; do printf '%s\\037' \"$a\" | tr '\\n' ' '; done; echo; }} >> '{dir}/{name}.args'\n{body}\n",
                 dir = self.dir.display()
             ),
         )
@@ -85,6 +96,8 @@ struct LiveServer {
     fake: FakeCommands,
     /// 測試用的「還活著的程序」，結束時一併清掉。
     sleepers: Vec<Child>,
+    /// 交給 init 收養的 agent 程序（見 `agent_process`），結束時一併清掉。
+    orphans: Vec<u32>,
 }
 
 impl Drop for LiveServer {
@@ -92,6 +105,11 @@ impl Drop for LiveServer {
         for sleeper in &mut self.sleepers {
             let _ = sleeper.kill();
             let _ = sleeper.wait();
+        }
+        for pid in &self.orphans {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -161,6 +179,7 @@ impl LiveServer {
             port,
             fake,
             sleepers: Vec::new(),
+            orphans: Vec::new(),
         };
         server.wait_until_ready().await?;
         Ok(server)
@@ -191,6 +210,31 @@ impl LiveServer {
         let pid = child.id();
         self.sleepers.push(child);
         pid
+    }
+
+    /// 啟動一個程式名稱（argv[0]）為 `program` 的睡著程序，代表執行中的 agent，回傳 pid。
+    /// 它由 init 收養，被結束後馬上被收屍，不會留成 zombie；`setup` 是在它之前執行的 bash 指令。
+    fn agent_process_with(&mut self, program: &str, setup: &str) -> u32 {
+        let output = Command::new("bash")
+            .args([
+                "-c",
+                &format!(
+                    "{setup}(exec -a {program} sleep 600) </dev/null >/dev/null 2>&1 & echo $!"
+                ),
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let pid = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap();
+        self.orphans.push(pid);
+        pid
+    }
+
+    fn agent_process(&mut self, program: &str) -> u32 {
+        self.agent_process_with(program, "")
     }
 
     /// 回傳一個已經結束的程序的 pid，代表「已經關掉的 Claude Code」。
@@ -2549,4 +2593,326 @@ async fn a_conversation_name_must_end_at_the_separator_to_match_a_tab_title() {
     let live = server.live().await;
 
     assert_eq!(names(&live), vec!["fix login"]);
+}
+
+// ── 關閉 session ─────────────────────────────────────────────────────────
+
+const CLOSE: &str = "/api/live/close";
+
+/// 程序還在執行；已結束、只等收屍的 zombie 不算。
+fn running(pid: u32) -> bool {
+    Command::new("/bin/ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| {
+            let state = String::from_utf8_lossy(&output.stdout);
+            let state = state.trim();
+            !state.is_empty() && !state.starts_with('Z')
+        })
+}
+
+/// 一個閒置、名稱為「芒果許」、在 /work/mango-hsu 的 Claude Code session（id 為 s-1），回傳它的 pid。
+async fn server_with_closable_session() -> (LiveServer, u32) {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.agent_process("claude");
+    let mut session = registered("s-1", "/work/mango-hsu", "idle", 1000);
+    session["name"] = json!("芒果許");
+    server.claude_session(pid, session);
+    (server, pid)
+}
+
+/// 沒有 Ghostty，改由 Windows Terminal 提供分頁：第一次呼叫 powershell.exe 列出 `titles`，
+/// 之後的呼叫是按關閉鈕，印出 ok；`hangs_up` 有值時對那個 pid 送 SIGHUP，就像分頁關掉時
+/// agent 收到的訊號。
+fn windows_terminal_tabs(server: &LiveServer, titles: &[&str], hangs_up: Option<u32>) {
+    server.fake.failing("osascript");
+    let listing: String = titles.iter().map(|title| format!("{title}\r\n")).collect();
+    let dir = server.fake.dir.display();
+    fs::write(server.fake.dir.join("tabs.txt"), listing).unwrap();
+    let hangup = hangs_up.map_or(String::new(), |pid| format!("kill -HUP {pid}; "));
+    server.fake.scripted(
+        "powershell.exe",
+        &format!(
+            "if [ \"$(wc -l < '{dir}/powershell.exe.args')\" -eq 1 ]; then cat '{dir}/tabs.txt'; else {hangup}echo ok; fi"
+        ),
+    );
+}
+
+#[tokio::test]
+async fn closing_a_card_closes_its_windows_terminal_tab_and_the_session_ends() {
+    let (server, pid) = server_with_closable_session().await;
+    windows_terminal_tabs(
+        &server,
+        &["Windows PowerShell", "✳ 別的工作", "✳ 芒果許"],
+        Some(pid),
+    );
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+    let scripts = powershell_scripts(&server);
+    assert_eq!(scripts.len(), 2, "一次列出分頁、一次按關閉鈕");
+    assert!(scripts[1].contains("$index = 2"));
+    assert!(scripts[1].contains("CloseButton"));
+}
+
+#[tokio::test]
+async fn on_ghostty_the_terminal_running_the_session_is_closed() {
+    let (server, pid) = server_with_closable_session().await;
+    server
+        .fake
+        .scripted("osascript", &format!("kill -HUP {pid}; echo ok"));
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0][1].contains("close term"));
+    // 這個程序沒有終端機，所以沒有 tty 可比對，只能靠資料夾與標題
+    assert_eq!(calls[0][2..], ["", "/work/mango-hsu", "芒果許", "ends"]);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ghostty_is_told_which_terminal_the_session_runs_in() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    // script 開一個虛擬終端機，在裡面執行 agent：它的 stdin 就是那個終端機
+    let mut holder = Command::new("script")
+        .args(["-qfec", "exec -a claude sleep 600", "/dev/null"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let pid = loop {
+        let children = fs::read_to_string(format!("/proc/{0}/task/{0}/children", holder.id()))
+            .unwrap_or_default();
+        if let Some(pid) = children.split_whitespace().next() {
+            break pid.parse::<u32>().unwrap();
+        }
+        assert!(Instant::now() < deadline, "script 沒有啟動 agent");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    server.orphans.push(pid);
+    let tty = fs::read_link(format!("/proc/{pid}/fd/0")).unwrap();
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+    server
+        .fake
+        .scripted("osascript", &format!("kill -HUP {pid}; echo ok"));
+
+    let (status, _) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(status, 200);
+    assert_eq!(server.fake.calls("osascript")[0][2], tty.to_str().unwrap());
+}
+
+#[tokio::test]
+async fn without_a_matching_tab_the_session_is_ended_with_sigterm_and_no_tab_is_closed() {
+    let (server, pid) = server_with_closable_session().await;
+    windows_terminal_tabs(&server, &["Windows PowerShell", "✳ 別的工作"], None);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": false}));
+    assert!(!running(pid));
+    assert_eq!(
+        powershell_scripts(&server).len(),
+        1,
+        "只列出分頁，沒有按關閉鈕"
+    );
+}
+
+#[tokio::test]
+async fn when_two_tabs_carry_the_name_neither_is_closed() {
+    let (server, pid) = server_with_closable_session().await;
+    windows_terminal_tabs(&server, &["✳ 芒果許", "✳ 芒果許"], None);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": false}));
+    assert!(!running(pid));
+    assert_eq!(powershell_scripts(&server).len(), 1);
+}
+
+#[tokio::test]
+async fn a_session_still_running_after_its_tab_closed_is_sent_sigterm() {
+    let (server, pid) = server_with_closable_session().await;
+    // 按了關閉鈕，但 agent 沒有收到掛斷訊號
+    windows_terminal_tabs(&server, &["✳ 芒果許"], None);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+}
+
+#[tokio::test]
+async fn a_session_that_outlives_sigterm_is_reported_and_never_force_killed() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.agent_process_with("claude", "trap '' TERM HUP; ");
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": false, "tabClosed": false}));
+    assert!(running(pid));
+}
+
+#[tokio::test]
+async fn a_working_session_is_not_closed() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.agent_process("claude");
+    server.claude_session(pid, registered("s-1", "/work/erp", "busy", 1000));
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 409);
+    assert!(body["message"].as_str().unwrap().contains("工作中"));
+    assert!(running(pid));
+    assert!(server.fake.calls("osascript").is_empty());
+}
+
+#[tokio::test]
+async fn a_suspended_older_process_of_the_same_session_is_ended_too() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let suspended = server.agent_process("claude");
+    Command::new("kill")
+        .args(["-STOP", &suspended.to_string()])
+        .status()
+        .unwrap();
+    let current = server.agent_process("claude");
+    server.claude_session(suspended, registered("s-1", "/work/erp", "idle", 1000));
+    server.claude_session(current, registered("s-1", "/work/erp", "idle", 2000));
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["ended"], true);
+    assert!(!running(current));
+    assert!(!running(suspended));
+}
+
+#[tokio::test]
+async fn a_session_left_only_with_a_suspended_process_still_has_its_tab_closed() {
+    let (server, pid) = server_with_closable_session().await;
+    Command::new("kill")
+        .args(["-STOP", &pid.to_string()])
+        .status()
+        .unwrap();
+    // 暫停中的程序收不到掛斷訊號，要靠 SIGKILL 結束
+    windows_terminal_tabs(&server, &["✳ 芒果許"], None);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+}
+
+#[tokio::test]
+async fn a_process_that_is_not_the_agent_is_never_signalled() {
+    // 登記檔留下的 pid 已經被系統給了別的程式
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.agent_process("vim");
+    server.claude_session(pid, registered("s-1", "/work/erp", "idle", 1000));
+
+    let (status, _) = server
+        .post_json(CLOSE, json!({"agent":"claude","id":"s-1"}))
+        .await;
+
+    assert_eq!(status, 404);
+    assert!(running(pid));
+}
+
+#[tokio::test]
+async fn close_requests_that_do_not_come_from_the_dashboard_itself_are_refused() {
+    let (server, pid) = server_with_closable_session().await;
+    let body = json!({"agent":"claude","id":"s-1"}).to_string();
+    let port = server.port;
+    let rebinding_origin = format!("http://evil.example:{port}");
+    let rebinding_host = format!("evil.example:{port}");
+    let json_type = ("Content-Type", "application/json");
+
+    for headers in [
+        vec![json_type],
+        vec![json_type, ("Origin", "https://evil.example")],
+        vec![
+            json_type,
+            ("Origin", &rebinding_origin),
+            ("Host", &rebinding_host),
+        ],
+    ] {
+        let (status, _) = server.post_raw(CLOSE, &headers, &body).await;
+        assert_eq!(status, 403, "{headers:?} 應被拒絕");
+    }
+    assert!(running(pid));
+}
+
+#[tokio::test]
+async fn a_codex_session_resumed_by_id_closes_its_tab() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.agent_process("codex");
+    server.codex_thread(T1, "/work/erp", Some("比較"), 1000, "user", "done");
+    server.processes(&[(pid, "ttys003", &format!("codex resume {T1}"), "/work/erp")]);
+    windows_terminal_tabs(&server, &["✳ 芒果許", "比較 | erp"], Some(pid));
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body, json!({"ended": true, "tabClosed": true}));
+    assert!(!running(pid));
+    assert!(powershell_scripts(&server)[1].contains("$index = 1"));
+}
+
+#[tokio::test]
+async fn codex_cannot_be_closed_when_one_folder_has_several_processes_without_ids() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let first = server.agent_process("codex");
+    let second = server.agent_process("codex");
+    server.codex_thread(T1, "/work/erp", Some("比較"), 1000, "user", "done");
+    server.processes(&[
+        (first, "ttys003", "codex", "/work/erp"),
+        (second, "ttys004", "codex", "/work/erp"),
+    ]);
+
+    let (status, body) = server
+        .post_json(CLOSE, json!({"agent":"codex","id":T1}))
+        .await;
+
+    assert_eq!(status, 409);
+    assert!(body["message"].as_str().unwrap().contains("分不出"));
+    assert!(running(first) && running(second));
 }

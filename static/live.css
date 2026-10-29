@@ -227,7 +227,8 @@
 }
 
 .live-rename,
-.live-pin {
+.live-pin,
+.live-close {
   padding: 0 4px;
   border: none;
   border-radius: 4px;
@@ -241,6 +242,21 @@
 .live-rename:hover:not([aria-disabled="true"]),
 .live-rename:focus-visible {
   color: var(--accent-cyan);
+}
+
+.live-close:hover:not(:disabled),
+.live-close:focus-visible,
+.live-close-armed {
+  color: var(--neon-red);
+}
+
+.live-close-armed {
+  font-size: 0.8rem;
+}
+
+.live-close:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .live-rename[aria-disabled="true"] {

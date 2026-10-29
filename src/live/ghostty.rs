@@ -69,13 +69,17 @@ pub fn tabs() -> Option<Vec<Tab>> {
     )
 }
 
-pub fn focus(cwd: &str, name: &str, how: TitleMatch) -> Focus {
-    let mode = match how {
+/// 腳本裡標題的比對方式。
+fn mode(how: TitleMatch) -> &'static str {
+    match how {
         TitleMatch::EndsWith => "ends",
         TitleMatch::StartsWith => "starts",
-    };
+    }
+}
+
+pub fn focus(cwd: &str, name: &str, how: TitleMatch) -> Focus {
     let Ok(output) = Command::new("osascript")
-        .args(["-e", FOCUS_SCRIPT, cwd, name, mode])
+        .args(["-e", FOCUS_SCRIPT, cwd, name, mode(how)])
         .output()
     else {
         return Focus::Unsupported;
@@ -88,6 +92,65 @@ pub fn focus(cwd: &str, name: &str, how: TitleMatch) -> Focus {
     } else {
         Focus::Missing
     }
+}
+
+/// 關掉 session 所在的終端機；分頁只剩它時 Ghostty 會連分頁一起關，分割出來的其他窗格不受影響。
+/// 1.4 起終端機有 tty 屬性，可以精準對到程序；1.3 沒有這個屬性（取用時出錯），改用資料夾與
+/// 標題比對，而且必須剛好一個符合。關閉比跳轉嚴格：標題規則同 Windows Terminal 且分大小寫，
+/// 否則「login」不在 Ghostty 裡時會關到同資料夾的「fix login」。Ghostty 的 close 不會跳出確認視窗。
+const CLOSE_SCRIPT: &str = r#"on run argv
+  if application "Ghostty" is not running then return "missing"
+  set wantTty to item 1 of argv
+  set wantDir to item 2 of argv
+  set wantName to item 3 of argv
+  set wantMode to item 4 of argv
+  if wantTty is not "" then
+    try
+      tell application "Ghostty"
+        repeat with term in terminals
+          if (tty of term) is wantTty then
+            close term
+            return "ok"
+          end if
+        end repeat
+      end tell
+      return "missing"
+    end try
+  end if
+  if wantName is "" then return "missing"
+  tell application "Ghostty"
+    set dirs to working directory of terminals
+    set titles to name of terminals
+  end tell
+  set found to 0
+  repeat with i from 1 to count of titles
+    if item i of dirs is wantDir and my sameName(item i of titles, wantName, wantMode) then
+      if found is not 0 then return "missing"
+      set found to i
+    end if
+  end repeat
+  if found is 0 then return "missing"
+  tell application "Ghostty" to close terminal found
+  return "ok"
+end run
+
+on sameName(title, wantName, wantMode)
+  considering case
+    if wantMode is "starts" then return title starts with (wantName & " | ")
+    set i to offset of " " in title
+    if i is 0 or i is (length of title) then return false
+    return (text (i + 1) thru -1 of title) is wantName
+  end considering
+end sameName"#;
+
+/// 關掉 session 所在的終端機，回傳有沒有關到；沒有 Ghostty 或不是 macOS 時回傳 None。
+pub fn close(tty: Option<&str>, cwd: &str, name: &str, how: TitleMatch) -> Option<bool> {
+    let output = Command::new("osascript")
+        .args(["-e", CLOSE_SCRIPT, tty.unwrap_or(""), cwd, name, mode(how)])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).trim() == "ok")
 }
 
 /// 在最前面的視窗開一個新分頁（沒有視窗就開新視窗）：資料夾以初始工作資料夾設定，

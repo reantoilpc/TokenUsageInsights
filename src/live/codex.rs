@@ -28,6 +28,7 @@ const NON_INTERACTIVE: [&str; 7] = [
 const TURN_EVENTS: [&str; 3] = ["task_started", "task_complete", "turn_aborted"];
 
 struct Process {
+    pid: u32,
     cwd: String,
     /// `codex resume <id>` 帶的對話 id。
     thread_id: Option<String>,
@@ -61,39 +62,42 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
         return Vec::new();
     }
     let threads = threads(codex_dir, 0); // 最近更新的在前
-    let mut open: Vec<&Thread> = Vec::new();
+    let mut open: Vec<(&Thread, Vec<u32>)> = Vec::new(); // 開著的對話與執行它的程序
 
     // `codex resume <id>` 已經指明是哪個對話
-    for id in processes
-        .iter()
-        .filter_map(|process| process.thread_id.as_ref())
-    {
-        if let Some(thread) = threads.iter().find(|thread| &thread.id == id) {
-            if !open.iter().any(|known| known.id == thread.id) {
-                open.push(thread);
-            }
+    for process in &processes {
+        let Some(id) = &process.thread_id else {
+            continue;
+        };
+        let Some(thread) = threads.iter().find(|thread| &thread.id == id) else {
+            continue;
+        };
+        match open.iter_mut().find(|(known, _)| known.id == thread.id) {
+            Some((_, pids)) => pids.push(process.pid),
+            None => open.push((thread, vec![process.pid])),
         }
     }
 
     // 沒有 id 的程序：只知道資料夾，要從該資料夾的對話裡挑
-    let mut by_folder: Vec<(&str, usize)> = Vec::new();
+    let mut by_folder: Vec<(&str, Vec<u32>)> = Vec::new();
     for process in processes
         .iter()
         .filter(|process| process.thread_id.is_none())
     {
         match by_folder.iter_mut().find(|(cwd, _)| *cwd == process.cwd) {
-            Some((_, count)) => *count += 1,
-            None => by_folder.push((&process.cwd, 1)),
+            Some((_, pids)) => pids.push(process.pid),
+            None => by_folder.push((&process.cwd, vec![process.pid])),
         }
     }
     let mut tabs = None; // 要用到才向 Ghostty 問，而且一次請求最多問一次
-    for (cwd, count) in by_folder {
+    for (cwd, pids) in by_folder {
+        let count = pids.len();
         let candidates: Vec<&Thread> = threads
             .iter()
             .filter(|thread| {
                 thread.cwd == cwd
                     && thread.is_terminal()
-                    && !open.iter().any(|known| known.id == thread.id)
+                    && !open.iter().any(|(known, _)| known.id == thread.id)
             })
             .collect();
         let chosen = if candidates.len() > 1 {
@@ -121,16 +125,26 @@ pub fn sessions(codex_dir: &Path) -> Vec<LiveSession> {
         } else {
             candidates
         };
-        open.extend(chosen.into_iter().take(count));
+        // 資料夾裡只有一個程序時才知道是它；好幾個時對話與程序對不起來
+        let pids = if count == 1 { pids } else { Vec::new() };
+        open.extend(
+            chosen
+                .into_iter()
+                .take(count)
+                .map(|thread| (thread, pids.clone())),
+        );
     }
-    open.into_iter().map(into_live_session).collect()
+    open.into_iter()
+        .map(|(thread, pids)| into_live_session(thread, pids))
+        .collect()
 }
 
-fn into_live_session(thread: &Thread) -> LiveSession {
+fn into_live_session(thread: &Thread, pids: Vec<u32>) -> LiveSession {
     let transcript = transcript::read(&thread.rollout_path, &CODEX);
     let (last_prompt, prompt_at) = Prompt::split(transcript.last_prompt);
     LiveSession {
         cwd: thread.cwd.clone(),
+        pids,
         agent: "codex",
         id: thread.id.clone(),
         name: thread.name.clone(),
@@ -272,6 +286,7 @@ fn processes() -> Vec<Process> {
         .into_iter()
         .filter_map(|(pid, thread_id)| {
             Some(Process {
+                pid,
                 cwd: cwds.get(&pid)?.clone(),
                 thread_id,
             })

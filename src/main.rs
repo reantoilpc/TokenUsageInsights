@@ -345,6 +345,7 @@ async fn main() {
         .route("/api/live", get(live::get_live))
         .route("/api/live/focus", post(live::post_focus))
         .route("/api/live/resume", post(live::post_resume))
+        .route("/api/live/close", post(live::post_close))
         // 帶 :assistant 變數的路由
         .route("/api/:assistant/dates", get(get_available_dates))
         .route("/api/:assistant/setup-info", get(get_setup_info))
