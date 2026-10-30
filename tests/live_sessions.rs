@@ -237,6 +237,43 @@ impl LiveServer {
         self.agent_process_with(program, "")
     }
 
+    /// 在 script 開的同一個虛擬終端機裡啟動 `count` 個名稱為 claude 的睡著程序，就像在同一個
+    /// 分頁裡先後開的 agent，回傳它們的 pid。只在 Linux 跑：macOS 的 script 參數不同。
+    #[cfg(target_os = "linux")]
+    async fn agents_in_one_terminal(&mut self, count: usize) -> Vec<u32> {
+        let file = self.root.join(format!("terminal-{}", self.sleepers.len()));
+        // 非互動的 bash 會把背景程序的 stdin 換成 /dev/null，<&0 讓它留在終端機上
+        let start = format!(
+            "(exec -a claude sleep 600) <&0 & echo $! >> '{}'; ",
+            file.display()
+        );
+        let holder = Command::new("script")
+            .args([
+                "-qfec",
+                &format!("{}wait", start.repeat(count)),
+                "/dev/null",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        self.sleepers.push(holder);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let pids: Vec<u32> = fs::read_to_string(&file)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| line.parse().unwrap())
+                .collect();
+            if pids.len() == count {
+                self.orphans.extend(&pids);
+                return pids;
+            }
+            assert!(Instant::now() < deadline, "script 沒有啟動 agent");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// 回傳一個已經結束的程序的 pid，代表「已經關掉的 Claude Code」。
     fn dead_pid(&self) -> u32 {
         let mut child = Command::new("true").spawn().unwrap();
@@ -640,6 +677,52 @@ async fn a_session_with_two_processes_shows_one_card_from_the_most_recently_upda
     let items = live["live"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["status"], "idle");
+}
+
+/// 像按了 Ctrl+Z 一樣暫停程序。
+fn suspend(pid: u32) {
+    Command::new("kill")
+        .args(["-STOP", &pid.to_string()])
+        .status()
+        .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_suspended_agent_whose_terminal_now_runs_another_one_moves_to_recently_ended() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    // Ctrl+Z 暫停之後，同一個分頁接續同一段對話，又 /clear 換了新的 session id：
+    // 暫停的程序登記檔還停在舊的 id
+    let pids = server.agents_in_one_terminal(2).await;
+    suspend(pids[0]);
+    server.claude_session(pids[0], registered("s-old", "/work/erp", "idle", 1000));
+    server.claude_session(pids[1], registered("s-new", "/work/erp", "idle", 2000));
+    server.transcript(
+        "-work-erp",
+        "s-old",
+        &finished_conversation("s-old", "/work/erp", "修好登入", None),
+    );
+
+    let live = server.live().await;
+
+    assert_eq!(live_ids(&live), vec!["s-new"]);
+    assert_eq!(recent_ids(&live), vec!["s-old"]);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_suspended_agent_keeps_its_card_while_no_other_agent_runs_in_its_terminal() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    // 只按了 Ctrl+Z 去跑別的指令，等一下會 fg 回來；別的分頁裡的 agent 不影響它
+    let suspended = server.agents_in_one_terminal(1).await[0];
+    let elsewhere = server.agents_in_one_terminal(1).await[0];
+    suspend(suspended);
+    server.claude_session(suspended, registered("s-paused", "/work/erp", "idle", 1000));
+    server.claude_session(elsewhere, registered("s-other", "/work/crm", "idle", 2000));
+
+    let live = server.live().await;
+
+    assert_eq!(live_ids(&live), vec!["s-other", "s-paused"]);
 }
 
 fn typed(text: &str, timestamp: &str) -> Value {
@@ -1978,6 +2061,15 @@ fn finished_conversation(
     lines
 }
 
+fn live_ids(live: &Value) -> Vec<&str> {
+    live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect()
+}
+
 fn recent_ids(live: &Value) -> Vec<&str> {
     live["recent"]
         .as_array()
@@ -2803,10 +2895,7 @@ async fn a_working_session_is_not_closed() {
 async fn a_suspended_older_process_of_the_same_session_is_ended_too() {
     let mut server = LiveServer::start(Some("127.0.0.1")).await;
     let suspended = server.agent_process("claude");
-    Command::new("kill")
-        .args(["-STOP", &suspended.to_string()])
-        .status()
-        .unwrap();
+    suspend(suspended);
     let current = server.agent_process("claude");
     server.claude_session(suspended, registered("s-1", "/work/erp", "idle", 1000));
     server.claude_session(current, registered("s-1", "/work/erp", "idle", 2000));
@@ -2824,10 +2913,7 @@ async fn a_suspended_older_process_of_the_same_session_is_ended_too() {
 #[tokio::test]
 async fn a_session_left_only_with_a_suspended_process_still_has_its_tab_closed() {
     let (server, pid) = server_with_closable_session().await;
-    Command::new("kill")
-        .args(["-STOP", &pid.to_string()])
-        .status()
-        .unwrap();
+    suspend(pid);
     // 暫停中的程序收不到掛斷訊號，要靠 SIGKILL 結束
     windows_terminal_tabs(&server, &["✳ 芒果許"], None);
 

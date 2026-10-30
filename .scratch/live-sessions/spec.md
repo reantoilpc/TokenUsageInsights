@@ -123,6 +123,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 55. 身為開發者，我不想同一個 session 出現兩張一樣的卡片（例如以 Ctrl+Z 暫停後，又在同一個分頁接續）。
 56. 身為開發者，我想讓閒置的卡片不寫「閒置」兩個字、最後一行不出現 `[Image #2]` 這種佔位字，讓卡片只留有用的資訊，標題也比較常一行放得下。
 57. 身為開發者，我想在 session 剛壓縮完時，卡片不要還顯示壓縮前的大數字，以免以為它又快要被壓縮了。
+63. 身為開發者，我不想在 Ctrl+Z 暫停 `claude`、又在同一個分頁開了別的 session（例如接續後 `/clear`）之後，看到暫停的那個也佔一張卡片：那個分頁已經不是它了。
 
 ### 關閉
 
@@ -222,6 +223,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - context 的格式：`context 121K`，千位取整數；999,500 起寫成一位小數的 M（例如 `1.2M`），避免四捨五入出「1000K」。一律灰色、不設門檻，滑鼠停留時說明「最後一次送出的 context 大小」。Claude Code 的紀錄沒有 context 上限，門檻只能用猜的；Codex 雖有 `model_context_window`，為了兩邊一致也不算百分比。
 - 剛壓縮：Claude Code 的紀錄在最後一次回覆之後有壓縮分界（`compact_boundary`）時，副標寫「context 剛壓縮」、不寫數字，滑鼠停留時說明「壓縮前 341K，下一次回覆後顯示新的大小」；下一次回覆後恢復顯示數字。壓縮分界記有壓縮前與壓縮後的 token 數，但壓縮後的數字不含每次請求都會帶的部分：本機 46 次壓縮中，壓縮後記下 2.2 萬～3.3 萬，下一次回覆實際送出 8.4 萬～10.8 萬，每次差 5.6 萬～7.8 萬，所以不拿來顯示；壓縮前的數字與壓縮前最後一次回覆只差 0.1 萬～0.4 萬，用它說明壓縮前的大小。Codex 不做這項。
 - 同一個 `agent:id` 有多個程序時只回一筆，取登記檔更新時間最新的那個（正在用的），跳轉也照它的資料找分頁。實際碰過的情況：在同一個分頁以 Ctrl+Z 暫停 `claude`，再 `claude --resume` 同一個 id，暫停中的程序 `kill(pid, 0)` 一樣會成功，兩筆登記都算還開著。
+- 被 Ctrl+Z 暫停的程序，若同一個終端機（tty）上還有沒暫停的 agent 程序，它的 session 不算進行中：那個分頁已經換成別的 session 在用。實際碰過的情況：暫停 `claude` 後在同一個分頁 `claude --resume` 同一個 id，再 `/clear`；暫停的程序登記檔停在舊的 id，還在用的那支換了新 id，上一條的合併就合不起來，多出一張。分頁裡沒有別的 agent 時照常顯示，因為可能等一下就 `fg` 回來。被拿掉的 session 和其他已結束的一樣列在「最近結束」（與進行中的 session 同標題、同資料夾時不列，所以上面的情況不會多出來）。Claude Code 與 Codex 都適用；Codex 分不出程序（同資料夾多個、沒帶 id）時沒有 pid 可查，不處理。每次輪詢都要查每個程序是否暫停與它的 tty：Linux 讀 `/proc`，macOS 每個程序執行一次 `/bin/ps`。
 - 刻意不放上卡片：模型與權限模式（各 session 幾乎都一樣）；git 分支（紀錄的是整個資料夾當時所在的分支，同一個資料夾的 session 會顯示同一個，容易誤以為是那個 session 自己的分支）；壓縮次數（要每次掃整份紀錄）；recap 的翻譯（Claude Code 有時用英文寫，翻譯要呼叫模型）。
 
 ### 關閉
@@ -286,7 +288,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 改名的名稱驗證是純前端邏輯：`static/rename-utils.js` 的 `renameCommand`，比照既有的前端工具以 `npm test` 測試。對話框、剪貼簿、跳轉與 ✎ 的停用規則以瀏覽器手動確認（攔下 POST，避免切換真正的分頁）。
 - 釘選的排序、切換與清理是純前端邏輯：`static/pin-utils.js`，比照 `rename-utils.js` 以 `npm test` 測試。📌 的外觀、點擊不觸發跳轉、重新整理後保留與 localStorage 失效時的行為以瀏覽器手動確認。
 - 關閉：以名稱為 `claude`／`codex` 的 `sleep` 程序（`exec -a`，交給 init 收養，結束後不會留成 zombie）當作 agent，透過 HTTP 接縫測試：關分頁後程序結束、按了關閉鈕但程序沒結束時補送 SIGTERM、找不到或同名分頁時只送 SIGTERM、不理 SIGTERM 的程序回報還在而且不強制結束、暫停中的舊程序一起結束、工作中與 Codex 分不出程序時拒絕、程式名稱不對的 pid 不送訊號、來源不符時拒絕。假的 powershell.exe 第一次列出分頁、第二次按關閉鈕時對 agent 送 SIGHUP；假的 osascript 同樣送 SIGHUP。Ghostty 收到的 tty 以 `script` 開的虛擬終端機驗證（只在 Linux 跑）。兩段式確認與提示文字是純前端邏輯（`static/close-utils.js`），以 `npm test` 測試。真正的 Windows Terminal 以另開 port 的看板、在新分頁開 `claude -n` 手動驗證。
-- 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）與剛壓縮的標示、重複程序合併，都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
+- 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）與剛壓縮的標示、重複程序合併、暫停中而分頁已換人用的程序（以 `script` 開的虛擬終端機放兩個 agent，只在 Linux 跑），都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
 
 ## Out of Scope
 
@@ -315,6 +317,6 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - **風險**：`GET /api/live` 與兩個 POST 都要求 Host 是本機位址，所以即使用 `HOST` 把網站改綁到非本機位址，也只能用 localhost 或 127.0.0.1 這類名稱連進來讀取；區網用法不在這次範圍。
 - **AppleScript 的坑**：在 Ghostty 的 `tell` 區塊裡，`tab` 指的是它的 tab 類別，會被轉成「tab」這個字而不是定位字元；分隔符號要在區塊外先定義。假的 osascript 測不出這種問題，所以保留一個要真的 Ghostty 才能跑的測試：`cargo test -- --ignored real_ghostty`。
 - **程式碼審查**：`/mattpocock-skills:code-review` 的發現已處理，細節見 commit 訊息；刻意不做的是把 agent 與 status 改成 enum（目前只有兩種 agent，之後有第三種再做）。Windows Terminal 那一輪（Standards 8 項、Spec 5 項）全部處理：兩個行為問題見 commit c84c7d2，結構與註解見 e8f2815，規格文字見本檔。
-- **macOS 上的關閉尚未實測**：這台開發機是 WSL。Ghostty 的 `close` 與 `tty` 是依 Ghostty 原始碼（1.3 加入 `close`，1.4 加入 `tty`）寫的，自動測試只驗證送出的參數；macOS 查程序現況用 `/bin/ps -o stat=,tty=,lstart=,args=`，自動測試走的是 Linux 的 `/proc`，也沒在 macOS 跑過（關閉的每一條路都會用到，包括只送 SIGTERM）。要在 Mac 上手動試一次。
+- **macOS 上的關閉尚未實測**：這台開發機是 WSL。Ghostty 的 `close` 與 `tty` 是依 Ghostty 原始碼（1.3 加入 `close`，1.4 加入 `tty`）寫的，自動測試只驗證送出的參數；macOS 查程序現況用 `/bin/ps -o stat=,tty=,lstart=,args=`，自動測試走的是 Linux 的 `/proc`，也沒在 macOS 跑過（關閉的每一條路都會用到，包括只送 SIGTERM；「進行中」每次輪詢判斷暫停中的程序也會用到）。要在 Mac 上手動試一次。
 - **終端機的程式結構**：`terminal` 模組放兩種終端機共用的型別與「先 Ghostty、再 Windows Terminal」的切換順序；`ghostty`、`windows_terminal` 各自只處理自己那一種。
 - **工作單拆分建議**：先做 Claude Code 的清單與卡片（含跳轉），再加 Codex，最後做「最近結束」與接續，每一段都能獨立驗證。
