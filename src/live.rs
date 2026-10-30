@@ -99,7 +99,7 @@ pub async fn get_live(headers: HeaderMap) -> Response {
 
 /// Claude Code 與 Codex 的 session 合在一起排序。
 fn live_sessions() -> Vec<LiveSession> {
-    let mut sessions = every_process_session();
+    let mut sessions = without_suspended_behind_another_agent(every_process_session());
     // 同一個 session 可能有兩個程序（例如 Ctrl+Z 暫停後又在同一個分頁接續），只留最近
     // 更新的那個：那是正在用的，跳轉也照它的資料找分頁
     let mut seen = HashSet::new();
@@ -107,6 +107,45 @@ fn live_sessions() -> Vec<LiveSession> {
     // 穩定排序：同一種狀態內維持最近有動靜的在前
     sessions.sort_by_key(|session| status_rank(session.status));
     sessions
+}
+
+/// 拿掉被 Ctrl+Z 暫停、而同一個終端機已經在跑別的 agent 的 session：那個分頁已經換成別的
+/// session 在用，暫停的程序登記檔卻停在舊的 id（例如接續後又 /clear），留著就多一張卡片。
+/// 分頁裡沒有別的 agent 時照常顯示，因為可能等一下就 fg 回來。
+fn without_suspended_behind_another_agent(sessions: Vec<LiveSession>) -> Vec<LiveSession> {
+    let processes: Vec<Vec<process::Info>> = sessions
+        .iter()
+        .map(|session| {
+            session
+                .pids
+                .iter()
+                .filter_map(|pid| process::inspect(*pid))
+                // 同關閉：登記檔留下的 pid 可能已經給了別的程式
+                .filter(|info| info.program == session.agent)
+                .collect()
+        })
+        .collect();
+    let busy_terminals: HashSet<&str> = processes
+        .iter()
+        .flatten()
+        .filter(|info| !info.stopped)
+        .filter_map(|info| info.tty.as_deref())
+        .collect();
+    let behind_another_agent = processes.iter().map(|infos| {
+        !infos.is_empty()
+            && infos.iter().all(|info| {
+                info.stopped
+                    && info
+                        .tty
+                        .as_deref()
+                        .is_some_and(|tty| busy_terminals.contains(tty))
+            })
+    });
+    sessions
+        .into_iter()
+        .zip(behind_another_agent)
+        .filter_map(|(session, behind)| (!behind).then_some(session))
+        .collect()
 }
 
 /// 每個程序一筆、最近更新的在前，同一個 session 可能出現好幾筆。
@@ -203,6 +242,14 @@ pub async fn post_close(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         return failure(StatusCode::FORBIDDEN, "請求來源不符");
     }
     let outcome = tokio::task::spawn_blocking(move || {
+        // 畫面上已經拿掉的（暫停中、分頁已換別的 session 在用）不給關：關它的分頁會關到正在用的那個。
+        // 頁面每 3 秒才更新，舊卡片可能還在畫面上
+        let shown = live_sessions()
+            .iter()
+            .any(|session| session.agent == request.agent && session.id == request.id);
+        if !shown {
+            return Err(close::Refusal::Missing);
+        }
         let copies: Vec<LiveSession> = every_process_session()
             .into_iter()
             .filter(|session| session.agent == request.agent && session.id == request.id)

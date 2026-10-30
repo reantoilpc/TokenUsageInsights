@@ -1,4 +1,4 @@
-//! 結束 agent 程序用的作業系統操作：查程序現況、送訊號、等它結束。
+//! agent 程序的作業系統操作：查程序現況（「進行中」與關閉都會用），以及關閉時送訊號、等它結束。
 //! 每次送訊號前都重新確認 pid 還是同一個程序（啟動時間不變），避免 pid 被系統重複使用時誤殺。
 
 use std::time::{Duration, Instant};
@@ -15,7 +15,8 @@ pub struct Info {
     pub stopped: bool,
     /// 已經結束、只等上層程序收屍（zombie）。
     ended: bool,
-    /// 控制終端機，例如 `/dev/ttys003`；Ghostty 以它找到程序所在的終端機。
+    /// 所在的終端機，例如 `/dev/ttys003`（Linux 取 stdin，macOS 取控制終端機）。Ghostty 以它
+    /// 找到要關的終端機；「進行中」以它判斷暫停的程序所在的分頁是否已有別的 agent 在跑。
     pub tty: Option<String>,
 }
 
