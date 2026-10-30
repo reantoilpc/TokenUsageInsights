@@ -2087,6 +2087,7 @@ fn card_ids<'a>(live: &'a Value, list: &str) -> Vec<&'a str> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 fn live_ids(live: &Value) -> Vec<&str> {
     card_ids(live, "live")
 }
