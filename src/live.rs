@@ -113,7 +113,7 @@ fn live_sessions() -> Vec<LiveSession> {
 fn every_process_session() -> Vec<LiveSession> {
     let mut sessions = claude::sessions(&crate::db::get_claude_dir());
     sessions.extend(codex::sessions(&crate::db::get_codex_dir()));
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     sessions
 }
 
