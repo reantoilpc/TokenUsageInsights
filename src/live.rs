@@ -120,6 +120,8 @@ fn without_suspended_behind_another_agent(sessions: Vec<LiveSession>) -> Vec<Liv
                 .pids
                 .iter()
                 .filter_map(|pid| process::inspect(*pid))
+                // 同關閉：登記檔留下的 pid 可能已經給了別的程式
+                .filter(|info| info.program == session.agent)
                 .collect()
         })
         .collect();
@@ -129,7 +131,7 @@ fn without_suspended_behind_another_agent(sessions: Vec<LiveSession>) -> Vec<Liv
         .filter(|info| !info.stopped)
         .filter_map(|info| info.tty.as_deref())
         .collect();
-    let superseded = processes.iter().map(|infos| {
+    let behind_another_agent = processes.iter().map(|infos| {
         !infos.is_empty()
             && infos.iter().all(|info| {
                 info.stopped
@@ -141,8 +143,8 @@ fn without_suspended_behind_another_agent(sessions: Vec<LiveSession>) -> Vec<Liv
     });
     sessions
         .into_iter()
-        .zip(superseded)
-        .filter_map(|(session, superseded)| (!superseded).then_some(session))
+        .zip(behind_another_agent)
+        .filter_map(|(session, behind)| (!behind).then_some(session))
         .collect()
 }
 
@@ -240,6 +242,14 @@ pub async fn post_close(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
         return failure(StatusCode::FORBIDDEN, "請求來源不符");
     }
     let outcome = tokio::task::spawn_blocking(move || {
+        // 畫面上已經拿掉的（暫停中、分頁已換別的 session 在用）不給關：關它的分頁會關到正在用的那個。
+        // 頁面每 3 秒才更新，舊卡片可能還在畫面上
+        let shown = live_sessions()
+            .iter()
+            .any(|session| session.agent == request.agent && session.id == request.id);
+        if !shown {
+            return Err(close::Refusal::Missing);
+        }
         let copies: Vec<LiveSession> = every_process_session()
             .into_iter()
             .filter(|session| session.agent == request.agent && session.id == request.id)
