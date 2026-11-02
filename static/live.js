@@ -190,6 +190,8 @@ function renderPinButton(session, pinned) {
 // 優先度選單放在卡片外面：卡片每 3 秒整個重畫，放在卡片裡會被關掉。不做「點一下換下一級」：
 // 標成高的卡片會馬上換位置，連點時第二下可能點到別張卡片
 const priorityMenu = document.getElementById('priority-menu');
+const MENU_GAP = 4; // 選單與 ⚑ 的距離
+const MENU_MARGIN = 8; // 選單與捲動區左右邊緣的最小距離
 let priorityMenuKey = null;
 
 function renderPriorityButton(session, priority) {
@@ -220,9 +222,9 @@ function placePriorityMenu(button) {
   const box = area.getBoundingClientRect();
   const rect = button.getBoundingClientRect();
   const { offsetWidth: width, offsetHeight: height } = priorityMenu;
-  const left = Math.max(8, Math.min(rect.right - box.left - width, area.clientWidth - width - 8));
-  const below = rect.bottom + 4 + height <= box.bottom || rect.top - 4 - height < box.top;
-  const top = below ? rect.bottom - box.top + 4 : rect.top - box.top - height - 4;
+  const left = Math.max(MENU_MARGIN, Math.min(rect.right - box.left - width, area.clientWidth - width - MENU_MARGIN));
+  const below = rect.bottom + MENU_GAP + height <= box.bottom || rect.top - MENU_GAP - height < box.top;
+  const top = below ? rect.bottom - box.top + MENU_GAP : rect.top - box.top - height - MENU_GAP;
   priorityMenu.style.left = `${area.scrollLeft + left}px`;
   priorityMenu.style.top = `${area.scrollTop + top}px`;
 }
@@ -269,7 +271,7 @@ priorityMenu.addEventListener('click', (event) => {
   const key = priorityMenuKey;
   priorityStore.update((priorities) => setPriority(priorities, key, item.dataset.level));
   closePriorityMenu({ returnFocus: true });
-  render(lastData); // 換了優先度要重新排序；焦點跟著 ⚑ 走
+  if (lastData) render(lastData); // 換了優先度要重新排序；焦點跟著 ⚑ 走
 });
 // 掛在整份文件：用 Tab 離開選單後，Esc 一樣能關。改名對話框開著時 Esc 是關對話框
 document.addEventListener('keydown', (event) => {
@@ -461,8 +463,8 @@ function render(data) {
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map((item) => renderRecent(item, priorityOf(priorities, item))));
   if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
-  syncPriorityMenu();
   status.textContent = '';
+  syncPriorityMenu(); // 狀態文字清掉後標題列可能變矮，卡片跟著上移
 }
 
 async function refresh() {

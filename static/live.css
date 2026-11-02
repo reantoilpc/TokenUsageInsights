@@ -1,6 +1,6 @@
 /* 「進行中」頁面：沿用看板的主題變數（深色／淺色），卡片依寬度自動多欄。 */
 .live-main {
-  position: relative; /* 優先度選單以它的內容座標定位，捲動時跟著卡片走 */
+  position: relative;
   height: 100dvh;
   overflow-y: auto;
   padding: var(--space-5, 24px);
@@ -275,20 +275,16 @@
   opacity: 0.8;
 }
 
-/* data-level 只用在優先度 */
-[data-level="high"] {
+:is(.live-priority-tag, .live-priority, .live-priority-menu button)[data-level="high"] {
   --priority-color: var(--neon-red);
 }
 
-[data-level="low"] {
+:is(.live-priority-tag, .live-priority, .live-priority-menu button)[data-level="low"] {
   --priority-color: var(--text-muted);
 }
 
-.live-priority[data-level="high"],
-.live-priority[data-level="low"],
-.live-priority-menu [data-level="high"],
-.live-priority-menu [data-level="low"] {
-  color: var(--priority-color);
+.live-priority {
+  color: var(--priority-color, var(--text-muted));
 }
 
 .live-priority-tag {
@@ -330,7 +326,7 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--priority-color, var(--text-primary));
   font: inherit;
   font-size: 0.9rem;
   text-align: left;
