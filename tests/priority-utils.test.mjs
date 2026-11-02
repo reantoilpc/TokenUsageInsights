@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { pinKey } from '../static/pin-utils.js';
+import { cardKey } from '../static/pin-utils.js';
 import { orderCards, parsePriorities, priorityOf, prunePriorities, setPriority } from '../static/priority-utils.js';
 
 const session = (agent, id, status = 'idle') => ({ agent, id, status });
-const keys = (sessions) => sessions.map(pinKey);
+const keys = (sessions) => sessions.map(cardKey);
 
 test('within one status, high cards come first and low cards last; the rest keep the server order', () => {
   const live = [
@@ -41,14 +41,14 @@ test('pinned cards stay first in pin order whatever their priority', () => {
 test('a priority only matches the same agent and id', () => {
   const priorities = { 'codex:a': 'high' };
   assert.equal(priorityOf(priorities, session('codex', 'a')), 'high');
-  assert.equal(priorityOf(priorities, session('claude', 'a')), null);
+  assert.equal(priorityOf(priorities, session('claude', 'a')), 'normal');
 });
 
 test('choosing a level replaces the old one, normal removes it, and the stored map is not changed in place', () => {
   const stored = { 'claude:a': 'high' };
   assert.deepEqual(setPriority(stored, 'claude:a', 'low'), { 'claude:a': 'low' });
   assert.deepEqual(setPriority(stored, 'codex:b', 'high'), { 'claude:a': 'high', 'codex:b': 'high' });
-  assert.deepEqual(setPriority(stored, 'claude:a', null), {});
+  assert.deepEqual(setPriority(stored, 'claude:a', 'normal'), {});
   assert.deepEqual(stored, { 'claude:a': 'high' });
 });
 
@@ -69,7 +69,7 @@ test('stored priorities survive missing or corrupt data', () => {
   assert.deepEqual(parsePriorities('["claude:a"]'), {});
   assert.deepEqual(parsePriorities('"high"'), {});
   assert.deepEqual(
-    parsePriorities('{"claude:a":"high","claude:b":"urgent","claude:c":1,"claude:e":"toString","codex:d":"low"}'),
+    parsePriorities('{"claude:a":"high","claude:b":"urgent","claude:c":1,"claude:e":"toString","claude:f":"normal","codex:d":"low"}'),
     { 'claude:a': 'high', 'codex:d': 'low' },
   );
 });

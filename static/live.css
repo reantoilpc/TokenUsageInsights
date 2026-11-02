@@ -265,7 +265,6 @@
   cursor: default;
 }
 
-/* 沒設定時淡色，設定了以標籤的顏色亮起來 */
 .live-priority[data-level="normal"] {
   opacity: 0.4;
 }
