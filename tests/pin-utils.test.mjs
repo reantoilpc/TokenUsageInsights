@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { orderByPins, parsePins, pinKey, prunePins, togglePin } from '../static/pin-utils.js';
+import { cardKey } from '../static/card-utils.js';
+import { orderByPins, parsePins, prunePins, togglePin } from '../static/pin-utils.js';
 
 const session = (agent, id) => ({ agent, id });
-const keys = (sessions) => sessions.map(pinKey);
+const keys = (sessions) => sessions.map(cardKey);
 
 test('pinned cards come first in pin order, the rest keep the server order', () => {
   const live = [session('claude', 'a'), session('codex', 'b'), session('claude', 'c'), session('claude', 'd')];
