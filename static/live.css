@@ -227,6 +227,7 @@
 }
 
 .live-rename,
+.live-priority,
 .live-pin,
 .live-close {
   padding: 0 4px;
@@ -262,6 +263,89 @@
 .live-rename[aria-disabled="true"] {
   opacity: 0.4;
   cursor: default;
+}
+
+/* 沒設定時淡色，設定了以標籤的顏色亮起來 */
+.live-priority[data-level="normal"] {
+  opacity: 0.4;
+}
+
+.live-priority[data-level="normal"]:hover,
+.live-priority[data-level="normal"]:focus-visible {
+  opacity: 0.8;
+}
+
+.live-priority[data-level="high"] {
+  color: var(--neon-red);
+}
+
+.live-priority[data-level="low"] {
+  color: var(--text-muted);
+}
+
+.live-priority-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--text-muted);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+}
+
+.live-priority-high {
+  border-color: var(--neon-red);
+  background: color-mix(in srgb, var(--neon-red) 15%, transparent);
+  color: var(--neon-red);
+}
+
+.live-priority-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: 4px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--bg-drawer);
+  box-shadow: var(--shadow-glass);
+}
+
+.live-priority-menu[hidden] {
+  display: none;
+}
+
+.live-priority-menu button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.live-priority-menu button:hover,
+.live-priority-menu button:focus-visible {
+  background: var(--card-bg-hover);
+}
+
+.live-priority-menu [data-level="high"] {
+  color: var(--neon-red);
+}
+
+.live-priority-menu [data-level="low"] {
+  color: var(--text-muted);
+}
+
+.live-priority-menu [aria-pressed="true"]::after {
+  content: " ✓";
 }
 
 /* 📌 是彩色 emoji，color 改不了：沒釘時以去色加半透明呈現淡色 */

@@ -1,6 +1,7 @@
 // 「進行中」頁面：每 3 秒向後端取一次資料；頁面不可見時暫停，回到可見時立即更新。
 import { renameCommand } from './rename-utils.js';
-import { orderByPins, parsePins, pinKey, prunePins, togglePin } from './pin-utils.js';
+import { parsePins, pinKey, prunePins, togglePin } from './pin-utils.js';
+import { orderCards, parsePriorities, priorityOf, prunePriorities, setPriority } from './priority-utils.js';
 import { contextLabel } from './context-utils.js';
 import { CONFIRM_MS, closeNotice, isArmed, pressClose } from './close-utils.js';
 
@@ -51,6 +52,7 @@ async function focusSession(session) {
 // 幾乎都是 Claude Code，每張都寫就成了雜訊：只標出 Codex
 const AGENT_TAG = { codex: 'Codex' };
 const STATUS_LABEL = { waiting: '等你回覆', working: '工作中', idle: '閒置' };
+const PRIORITY_LABEL = { high: '高', low: '低' };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -67,7 +69,7 @@ function ago(ms) {
 }
 
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
-function renderCard(session, pinned) {
+function renderCard(session, pinned, priority) {
   const card = element('article', `live-card live-status-${session.status}${pinned ? ' live-pinned' : ''}`);
   card.dataset.key = `${session.agent}:${session.id}`;
   card.tabIndex = 0;
@@ -87,9 +89,9 @@ function renderCard(session, pinned) {
   // 閒置時只留給螢幕閱讀器，見 live.css
   side.append(element('span', 'live-card-state', `● ${state}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
-  side.append(renderPinButton(session, pinned));
+  side.append(renderPriorityButton(session, priority), renderPinButton(session, pinned));
   if (session.status !== 'working') side.append(renderCloseButton(session)); // 工作中被關會中斷正在跑的回合
-  head.append(element('span', 'live-card-title', session.name || session.folder), side);
+  head.append(renderTitle(session.name || session.folder, priority), side);
   card.append(head);
   const meta = renderMeta(session);
   if (meta.hasChildNodes()) card.append(meta);
@@ -104,6 +106,16 @@ function renderCard(session, pinned) {
     card.append(foot);
   }
   return card;
+}
+
+function renderTitle(text, priority) {
+  const title = element('span', 'live-card-title', text);
+  if (priority) {
+    const tag = element('span', `live-priority-tag live-priority-${priority}`, PRIORITY_LABEL[priority]);
+    tag.title = `優先度：${PRIORITY_LABEL[priority]}`;
+    title.prepend(tag);
+  }
+  return title;
 }
 
 function renderMeta(session) {
@@ -122,31 +134,37 @@ function renderMeta(session) {
   return meta;
 }
 
-// 釘選存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的清單互相蓋掉
-const PINS_KEY = 'live-pins';
-let pins = [];
+// 釘選與優先度存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的資料互相蓋掉。
+// localStorage 不能用（例如被瀏覽器擋掉）時只記在這次瀏覽
 let storageUsable = true;
-let lastData = null; // 切換釘選時立刻用上一份資料重畫，不等下一次輪詢
+let lastData = null; // 切換釘選或優先度時立刻用上一份資料重畫，不等下一次輪詢
 
-function loadPins() {
-  if (!storageUsable) return pins;
-  try {
-    pins = parsePins(localStorage.getItem(PINS_KEY));
-  } catch {
-    storageUsable = false;
-  }
-  return pins;
+function stored(key, parse, initial) {
+  let value = initial;
+  return {
+    load() {
+      if (!storageUsable) return value;
+      try {
+        value = parse(localStorage.getItem(key));
+      } catch {
+        storageUsable = false;
+      }
+      return value;
+    },
+    save(next) {
+      value = next;
+      if (!storageUsable) return;
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        storageUsable = false;
+      }
+    },
+  };
 }
 
-function savePins(next) {
-  pins = next;
-  if (!storageUsable) return;
-  try {
-    localStorage.setItem(PINS_KEY, JSON.stringify(next));
-  } catch {
-    storageUsable = false;
-  }
-}
+const pins = stored('live-pins', parsePins, []);
+const priorities = stored('live-priorities', parsePriorities, {});
 
 function renderPinButton(session, pinned) {
   const button = element('button', 'live-pin', '📌');
@@ -157,11 +175,80 @@ function renderPinButton(session, pinned) {
   button.title = pinned ? '取消釘選' : '釘選在最前面';
   button.addEventListener('click', (event) => {
     event.stopPropagation(); // 點卡片本身是跳轉
-    savePins(togglePin(loadPins(), pinKey(session)));
+    pins.save(togglePin(pins.load(), pinKey(session)));
     if (lastData) render(lastData);
   });
   return button;
 }
+
+// 優先度選單放在卡片外面：卡片每 3 秒整個重畫，放在卡片裡會被關掉。不做「點一下換下一級」：
+// 標成高的卡片會馬上換位置，連點時第二下可能點到別張卡片
+const priorityMenu = document.getElementById('priority-menu');
+let priorityMenuKey = null;
+
+function renderPriorityButton(session, priority) {
+  const key = pinKey(session);
+  const button = element('button', 'live-priority', '⚑');
+  button.type = 'button';
+  button.dataset.key = `priority:${key}`;
+  button.dataset.level = priority || 'normal';
+  button.setAttribute('aria-haspopup', 'true');
+  button.setAttribute('aria-expanded', String(priorityMenuKey === key));
+  button.setAttribute('aria-label', '設定優先度');
+  button.title = '設定優先度';
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // 點卡片本身是跳轉
+    if (priorityMenuKey === key) closePriorityMenu();
+    else openPriorityMenu(key, priority, button);
+  });
+  return button;
+}
+
+// 開關選單時不重畫：在點下去的當下換掉卡片，這一下就點不到卡片或它的按鈕了
+function priorityButton(key) {
+  return document.querySelector(`[data-key="${CSS.escape(`priority:${key}`)}"]`);
+}
+
+function openPriorityMenu(key, priority, button) {
+  if (priorityMenuKey) priorityButton(priorityMenuKey)?.setAttribute('aria-expanded', 'false');
+  priorityMenuKey = key;
+  button.setAttribute('aria-expanded', 'true');
+  for (const item of priorityMenu.querySelectorAll('button')) {
+    item.setAttribute('aria-pressed', String((item.dataset.level || null) === priority));
+  }
+  priorityMenu.hidden = false;
+  // 對齊按鈕右緣、貼在按鈕下方；用頁面座標，捲動時跟著卡片走
+  const rect = button.getBoundingClientRect();
+  const maxLeft = document.documentElement.clientWidth - priorityMenu.offsetWidth - 8;
+  priorityMenu.style.left = `${window.scrollX + Math.max(8, Math.min(rect.right - priorityMenu.offsetWidth, maxLeft))}px`;
+  priorityMenu.style.top = `${window.scrollY + rect.bottom + 4}px`;
+  priorityMenu.querySelector('[aria-pressed="true"]').focus();
+}
+
+function closePriorityMenu({ returnFocus = false } = {}) {
+  const button = priorityButton(priorityMenuKey);
+  priorityMenuKey = null;
+  priorityMenu.hidden = true;
+  button?.setAttribute('aria-expanded', 'false');
+  if (returnFocus) button?.focus();
+}
+
+priorityMenu.addEventListener('click', (event) => {
+  const item = event.target.closest('button');
+  if (!item) return;
+  priorities.save(setPriority(priorities.load(), priorityMenuKey, item.dataset.level || null));
+  closePriorityMenu({ returnFocus: true });
+  render(lastData); // 換了優先度要重新排序；焦點跟著 ⚑ 走
+});
+priorityMenu.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closePriorityMenu({ returnFocus: true });
+});
+// 點選單以外的地方就關閉；⚑ 自己處理開關
+document.addEventListener('pointerdown', (event) => {
+  if (priorityMenuKey && !priorityMenu.contains(event.target) && !event.target.closest('.live-priority')) {
+    closePriorityMenu();
+  }
+});
 
 // 關閉：結束 session 並關掉它的分頁，等同在 CLI 打 /exit 再關分頁。要點兩下才送出（見 close-utils.js），
 // 每 3 秒重畫時按鈕會重建，所以「準備關閉」與「關閉中」都記在卡片外面
@@ -295,10 +382,11 @@ function recentTitle(item) {
   return item.name || (item.lastPrompt ? item.lastPrompt.slice(0, 30) : item.folder);
 }
 
-function renderRecent(item) {
+// 優先度只顯示、不能改：標籤保留到接續，看得到才知道先接哪個
+function renderRecent(item, priority) {
   const row = element('article', 'live-card live-recent');
   const head = element('div', 'live-card-head');
-  head.append(element('span', 'live-card-title', recentTitle(item)));
+  head.append(renderTitle(recentTitle(item), priority));
   const foot = element('div', 'live-card-foot');
   if (item.lastPrompt) foot.append(element('span', 'live-card-prompt', item.lastPrompt));
   foot.append(element('span', 'live-card-time', ago(Date.now() - item.updatedAt)));
@@ -328,15 +416,18 @@ function renderProgress({ done, total, current }) {
 
 function render(data) {
   lastData = data;
-  const current = loadPins();
+  const pinned = pins.load();
+  const levels = priorities.load();
   empty.hidden = data.live.length > 0;
   cards.hidden = data.live.length === 0;
   const focusedKey = document.activeElement?.dataset?.key; // 每 3 秒重畫，別讓鍵盤焦點跟著消失
   cards.replaceChildren(
-    ...orderByPins(data.live, current).map((session) => renderCard(session, current.includes(pinKey(session)))),
+    ...orderCards(data.live, pinned, levels).map((session) =>
+      renderCard(session, pinned.includes(pinKey(session)), priorityOf(levels, session)),
+    ),
   );
   recentEmpty.hidden = data.recent.length > 0;
-  recentList.replaceChildren(...data.recent.map(renderRecent));
+  recentList.replaceChildren(...data.recent.map((item) => renderRecent(item, priorityOf(levels, item))));
   if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
   status.textContent = '';
 }
@@ -346,10 +437,13 @@ async function refresh() {
     const response = await fetch('/api/live', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    // 只在成功取得時清理，連線失敗不會動到釘選
-    const stored = loadPins();
-    const kept = prunePins(stored, data.live, data.recent);
-    if (kept.length !== stored.length) savePins(kept);
+    // 只在成功取得時清理，連線失敗不會動到釘選與優先度
+    const storedPins = pins.load();
+    const keptPins = prunePins(storedPins, data.live, data.recent);
+    if (keptPins.length !== storedPins.length) pins.save(keptPins);
+    const storedLevels = priorities.load();
+    const keptLevels = prunePriorities(storedLevels, data.live, data.recent);
+    if (Object.keys(keptLevels).length !== Object.keys(storedLevels).length) priorities.save(keptLevels);
     render(data);
   } catch {
     status.textContent = '無法取得資料，稍後重試';

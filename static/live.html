@@ -9,7 +9,7 @@
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=37">
-  <link rel="stylesheet" href="/static/live.css?v=14">
+  <link rel="stylesheet" href="/static/live.css?v=15">
 </head>
 <body>
   <main class="live-main">
@@ -29,6 +29,11 @@
       <p id="recent-empty" class="live-empty live-empty-small" hidden>24 小時內沒有結束的 session</p>
     </section>
   </main>
+  <div id="priority-menu" class="live-priority-menu" role="group" aria-label="優先度" hidden>
+    <button type="button" data-level="high">高</button>
+    <button type="button" data-level="">一般</button>
+    <button type="button" data-level="low">低</button>
+  </div>
   <dialog id="rename-dialog" class="live-dialog" aria-labelledby="rename-title">
     <form id="rename-form" method="dialog">
       <h2 id="rename-title" class="live-dialog-title">改名</h2>
@@ -45,6 +50,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/static/live.js?v=15"></script>
+  <script type="module" src="/static/live.js?v=16"></script>
 </body>
 </html>
