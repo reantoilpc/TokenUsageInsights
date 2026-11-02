@@ -140,7 +140,7 @@ function renderMeta(session) {
 // 釘選與優先度存在這個瀏覽器，每次使用前重讀：兩個分頁同時開著時，才不會拿舊的資料互相蓋掉。
 // localStorage 不能用（例如被瀏覽器擋掉）時只記在這次瀏覽
 let storageUsable = true;
-let lastData = null; // 切換釘選或優先度時立刻用上一份資料重畫，不等下一次輪詢
+let lastData = null; // 本機狀態一變就用上一份資料重畫，不等下一次輪詢
 
 function localStore(key, parse, initial) {
   let value = initial;
@@ -190,8 +190,8 @@ function renderPinButton(session, pinned) {
 // 優先度選單放在卡片外面：卡片每 3 秒整個重畫，放在卡片裡會被關掉。不做「點一下換下一級」：
 // 標成高的卡片會馬上換位置，連點時第二下可能點到別張卡片
 const priorityMenu = document.getElementById('priority-menu');
-const MENU_GAP = 4; // 選單與 ⚑ 的距離
-const MENU_MARGIN = 8; // 選單與捲動區左右邊緣的最小距離
+const MENU_BUTTON_GAP = 4;
+const MENU_EDGE_MARGIN = 8;
 let priorityMenuKey = null;
 
 function renderPriorityButton(session, priority) {
@@ -219,12 +219,18 @@ function findPriorityButton(key) {
 // 選單放在捲動的 .live-main 裡，以它的內容座標定位，捲動時才會跟著卡片走；下方放不下就翻到按鈕上方
 function placePriorityMenu(button) {
   const area = priorityMenu.offsetParent;
-  const box = area.getBoundingClientRect();
-  const rect = button.getBoundingClientRect();
+  const areaRect = area.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
   const { offsetWidth: width, offsetHeight: height } = priorityMenu;
-  const left = Math.max(MENU_MARGIN, Math.min(rect.right - box.left - width, area.clientWidth - width - MENU_MARGIN));
-  const below = rect.bottom + MENU_GAP + height <= box.bottom || rect.top - MENU_GAP - height < box.top;
-  const top = below ? rect.bottom - box.top + MENU_GAP : rect.top - box.top - height - MENU_GAP;
+  const left = Math.max(
+    MENU_EDGE_MARGIN,
+    Math.min(buttonRect.right - areaRect.left - width, area.clientWidth - width - MENU_EDGE_MARGIN),
+  );
+  const placeBelow =
+    buttonRect.bottom + MENU_BUTTON_GAP + height <= areaRect.bottom || buttonRect.top - MENU_BUTTON_GAP - height < areaRect.top;
+  const top = placeBelow
+    ? buttonRect.bottom - areaRect.top + MENU_BUTTON_GAP
+    : buttonRect.top - areaRect.top - height - MENU_BUTTON_GAP;
   priorityMenu.style.left = `${area.scrollLeft + left}px`;
   priorityMenu.style.top = `${area.scrollTop + top}px`;
 }
@@ -478,6 +484,7 @@ async function refresh() {
     render(data);
   } catch {
     status.textContent = '無法取得資料，稍後重試';
+    syncPriorityMenu(); // 這行字讓標題列換行時，卡片會下移
   }
 }
 
