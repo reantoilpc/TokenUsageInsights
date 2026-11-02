@@ -274,31 +274,37 @@
   opacity: 0.8;
 }
 
-.live-priority[data-level="high"] {
-  color: var(--neon-red);
+/* 標籤、⚑ 與選單共用的等級顏色；data-level 只用在優先度 */
+[data-level="high"] {
+  --priority-color: var(--neon-red);
 }
 
-.live-priority[data-level="low"] {
-  color: var(--text-muted);
+[data-level="low"] {
+  --priority-color: var(--text-muted);
+}
+
+.live-priority[data-level="high"],
+.live-priority[data-level="low"],
+.live-priority-menu [data-level="high"],
+.live-priority-menu [data-level="low"] {
+  color: var(--priority-color);
 }
 
 .live-priority-tag {
   display: inline-block;
   margin-right: 6px;
   padding: 0 6px;
-  border: 1px solid var(--text-muted);
+  border: 1px solid var(--priority-color);
   border-radius: 4px;
-  color: var(--text-muted);
+  color: var(--priority-color);
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1.5;
   vertical-align: 0.1em;
 }
 
-.live-priority-high {
-  border-color: var(--neon-red);
-  background: color-mix(in srgb, var(--neon-red) 15%, transparent);
-  color: var(--neon-red);
+.live-priority-tag[data-level="high"] {
+  background: color-mix(in srgb, var(--priority-color) 15%, transparent);
 }
 
 .live-priority-menu {
@@ -333,14 +339,6 @@
 .live-priority-menu button:hover,
 .live-priority-menu button:focus-visible {
   background: var(--card-bg-hover);
-}
-
-.live-priority-menu [data-level="high"] {
-  color: var(--neon-red);
-}
-
-.live-priority-menu [data-level="low"] {
-  color: var(--text-muted);
 }
 
 .live-priority-menu [aria-pressed="true"]::after {

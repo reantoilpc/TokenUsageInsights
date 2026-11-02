@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cardKey } from '../static/pin-utils.js';
+import { cardKey } from '../static/card-utils.js';
 import { orderCards, parsePriorities, priorityOf, prunePriorities, setPriority } from '../static/priority-utils.js';
 
 const session = (agent, id, status = 'idle') => ({ agent, id, status });

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { cardKey, orderByPins, parsePins, prunePins, togglePin } from '../static/pin-utils.js';
+import { cardKey } from '../static/card-utils.js';
+import { orderByPins, parsePins, prunePins, togglePin } from '../static/pin-utils.js';
 
 const session = (agent, id) => ({ agent, id });
 const keys = (sessions) => sessions.map(cardKey);

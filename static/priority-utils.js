@@ -1,5 +1,6 @@
 // 「進行中」卡片的優先度：'high'、'normal'（一般）或 'low'。只記錄高與低，以 `agent:id` 對應；沒有記錄就是一般。
-import { cardKey, orderByPins, stillListed } from './pin-utils.js';
+import { cardKey, isStillListed } from './card-utils.js';
+import { orderByPins } from './pin-utils.js';
 
 const RANK = { high: 0, normal: 1, low: 2 };
 
@@ -37,6 +38,5 @@ export function orderCards(sessions, pins, priorities) {
 }
 
 export function prunePriorities(priorities, live, recent) {
-  const isListed = stillListed(live, recent);
-  return Object.fromEntries(Object.entries(priorities).filter(([key]) => isListed(key)));
+  return Object.fromEntries(Object.entries(priorities).filter(([key]) => isStillListed(key, live, recent)));
 }
