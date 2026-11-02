@@ -1,5 +1,6 @@
 /* 「進行中」頁面：沿用看板的主題變數（深色／淺色），卡片依寬度自動多欄。 */
 .live-main {
+  position: relative; /* 優先度選單以它的內容座標定位，捲動時跟著卡片走 */
   height: 100dvh;
   overflow-y: auto;
   padding: var(--space-5, 24px);
@@ -274,7 +275,7 @@
   opacity: 0.8;
 }
 
-/* 標籤、⚑ 與選單共用的等級顏色；data-level 只用在優先度 */
+/* data-level 只用在優先度 */
 [data-level="high"] {
   --priority-color: var(--neon-red);
 }

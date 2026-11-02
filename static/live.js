@@ -214,12 +214,17 @@ function findPriorityButton(key) {
   return document.querySelector(`[data-key="${CSS.escape(`priority:${key}`)}"]`);
 }
 
-// 用頁面座標：捲動時跟著卡片走
+// 選單放在捲動的 .live-main 裡，以它的內容座標定位，捲動時才會跟著卡片走；下方放不下就翻到按鈕上方
 function placePriorityMenu(button) {
+  const area = priorityMenu.offsetParent;
+  const box = area.getBoundingClientRect();
   const rect = button.getBoundingClientRect();
-  const maxLeft = document.documentElement.clientWidth - priorityMenu.offsetWidth - 8;
-  priorityMenu.style.left = `${window.scrollX + Math.max(8, Math.min(rect.right - priorityMenu.offsetWidth, maxLeft))}px`;
-  priorityMenu.style.top = `${window.scrollY + rect.bottom + 4}px`;
+  const { offsetWidth: width, offsetHeight: height } = priorityMenu;
+  const left = Math.max(8, Math.min(rect.right - box.left - width, area.clientWidth - width - 8));
+  const below = rect.bottom + 4 + height <= box.bottom || rect.top - 4 - height < box.top;
+  const top = below ? rect.bottom - box.top + 4 : rect.top - box.top - height - 4;
+  priorityMenu.style.left = `${area.scrollLeft + left}px`;
+  priorityMenu.style.top = `${area.scrollTop + top}px`;
 }
 
 // 開關選單都不重畫卡片：在點下去的當下換掉卡片，這一下就點不到卡片或它的按鈕了
@@ -227,13 +232,13 @@ function openPriorityMenu(key, priority, button) {
   findPriorityButton(priorityMenuKey)?.setAttribute('aria-expanded', 'false');
   priorityMenuKey = key;
   button.setAttribute('aria-expanded', 'true');
-  markPriority(priority);
+  showCurrentLevel(priority);
   priorityMenu.hidden = false;
   placePriorityMenu(button);
   priorityMenu.querySelector('[aria-pressed="true"]').focus();
 }
 
-function markPriority(priority) {
+function showCurrentLevel(priority) {
   for (const item of priorityMenu.querySelectorAll('button')) {
     item.setAttribute('aria-pressed', String(item.dataset.level === priority));
   }
@@ -247,16 +252,16 @@ function closePriorityMenu({ returnFocus = false } = {}) {
   if (returnFocus) button?.focus();
 }
 
-// 重畫或縮放視窗之後：卡片換了位置就跟著移過去，另一個分頁改了等級就更新 ✓；
+// 重畫或縮放視窗後，卡片可能換了位置、等級可能被另一個分頁改了；
 // session 已經不在「進行中」就關掉，「最近結束」的優先度不能改
-function followPriorityMenu() {
+function syncPriorityMenu() {
   if (!priorityMenuKey) return;
   const button = findPriorityButton(priorityMenuKey);
   if (!button) return closePriorityMenu();
   placePriorityMenu(button);
-  markPriority(button.dataset.level);
+  showCurrentLevel(button.dataset.level);
 }
-window.addEventListener('resize', followPriorityMenu);
+window.addEventListener('resize', syncPriorityMenu);
 
 priorityMenu.addEventListener('click', (event) => {
   const item = event.target.closest('button');
@@ -270,7 +275,7 @@ priorityMenu.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && priorityMenuKey && !renameDialog.open) closePriorityMenu({ returnFocus: true });
 });
-// 點選單以外的地方就關閉；⚑ 自己處理開關
+// ⚑ 自己處理開關
 document.addEventListener('pointerdown', (event) => {
   if (priorityMenuKey && !priorityMenu.contains(event.target) && !event.target.closest('.live-priority')) {
     closePriorityMenu();
@@ -456,7 +461,7 @@ function render(data) {
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map((item) => renderRecent(item, priorityOf(priorities, item))));
   if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
-  followPriorityMenu();
+  syncPriorityMenu();
   status.textContent = '';
 }
 
