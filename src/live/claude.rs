@@ -1,7 +1,7 @@
 //! Claude Code 的 session：還開著的從它自己維護的登記檔讀，已結束的從對話紀錄讀。
 
 use super::{
-    folder_of,
+    folder_of, process,
     transcript::{self, Prompt},
     EndedSession, LiveSession, RECENT_LIMIT,
 };
@@ -33,8 +33,15 @@ impl Registered {
             .as_deref()
             .is_none_or(|kind| kind == "interactive")
             && self.entrypoint.as_deref() != Some("sdk-cli")
+            // 先用便宜的 kill 篩掉大量留下的登記檔，在 macOS 只有 pid 還在的才執行 /bin/ps
             && pid_alive(self.pid)
+            && is_claude(self.pid)
     }
+}
+
+/// 被強制結束的 Claude Code 會留下登記檔，它的 pid 之後可能給了別的程式。
+fn is_claude(pid: u32) -> bool {
+    process::inspect(pid).is_some_and(|info| info.program == "claude")
 }
 
 pub fn sessions(claude_dir: &Path) -> Vec<LiveSession> {
