@@ -1,7 +1,7 @@
 //! Claude Code 的 session：還開著的從它自己維護的登記檔讀，已結束的從對話紀錄讀。
 
 use super::{
-    folder_of,
+    folder_of, process,
     transcript::{self, Prompt},
     EndedSession, LiveSession, RECENT_LIMIT,
 };
@@ -33,8 +33,14 @@ impl Registered {
             .as_deref()
             .is_none_or(|kind| kind == "interactive")
             && self.entrypoint.as_deref() != Some("sdk-cli")
-            && pid_alive(self.pid)
+            && claude_running(self.pid)
     }
+}
+
+/// Claude Code 被強制結束時登記檔會留下來，之後系統可能把同一個 pid 給別的程式（實際碰過：
+/// WSL 重開後給了一直在跑的 /init），所以只看 pid 在不在不夠，還要確認它是 claude。
+fn claude_running(pid: u32) -> bool {
+    process::inspect(pid).is_some_and(|info| info.program == "claude")
 }
 
 pub fn sessions(claude_dir: &Path) -> Vec<LiveSession> {
@@ -119,24 +125,6 @@ fn transcript_path(claude_dir: &Path, cwd: &str, session_id: &str) -> Option<Pat
             .join(project)
             .join(format!("{session_id}.jsonl")),
     )
-}
-
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
-    // 與 updater 內私有的 is_process_alive 相同；複製而不改動上游檔案。
-    // 登記檔的內容不可信：0（整個行程群組）和超過 i32::MAX 的值（轉成帶號整數會變成負數，
-    // 例如 -1 代表所有行程）都不是單一行程，kill(pid, 0) 對它們會回報「活著」。
-    let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 0) else {
-        return false;
-    };
-    let res = unsafe { libc::kill(pid, 0) };
-    res == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-}
-
-// ponytail: 目前只支援 macOS／Linux；其他平台一律視為沒有進行中的 session
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
-    false
 }
 
 /// 專案資料夾下的 `<session id>.jsonl`；子 agent 的紀錄放在 `<session id>/subagents/`，不在這一層。

@@ -204,8 +204,13 @@ impl LiveServer {
         }
     }
 
-    /// 啟動一個會睡著的程序，回傳它的 pid，代表「還活著的 Claude Code 程序」。
+    /// 回傳一個還活著的 Claude Code 程序的 pid。
     fn alive_pid(&mut self) -> u32 {
+        self.agent_process("claude")
+    }
+
+    /// 啟動一個不是 agent 的睡著程序，代表登記檔留下後、pid 被系統給了的別的程式。
+    fn other_program_pid(&mut self) -> u32 {
         let child = Command::new("sleep").arg("600").spawn().unwrap();
         let pid = child.id();
         self.sleepers.push(child);
@@ -230,6 +235,7 @@ impl LiveServer {
             .parse()
             .unwrap();
         self.orphans.push(pid);
+        wait_until_named(pid, program);
         pid
     }
 
@@ -447,6 +453,24 @@ impl LiveServer {
     }
 }
 
+/// `$!` 拿到的是還沒 exec 的子 shell；等它換成 `program` 再交給測試，伺服器才認得出是 agent。
+/// 用固定路徑的 ps：PATH 上的是給伺服器用的假指令。
+fn wait_until_named(pid: u32, program: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = Command::new("/bin/ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let args = String::from_utf8_lossy(&output.stdout);
+        if args.split_whitespace().next() == Some(program) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{pid} 沒有變成 {program}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .no_proxy()
@@ -605,6 +629,27 @@ async fn a_registry_entry_whose_process_is_gone_is_not_live() {
         .map(|item| &item["id"])
         .collect();
     assert_eq!(ids, vec!["s-alive"]);
+}
+
+// 實際碰過的情況：WSL 重開後，舊登記檔的 pid 被給了一直在跑的 /init，卡片停在「工作中」，
+// 找不到分頁也不能關
+#[tokio::test]
+async fn a_registry_entry_whose_pid_now_belongs_to_another_program_is_not_live() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let claude = server.alive_pid();
+    let reused = server.other_program_pid();
+    server.claude_session(claude, registered("s-claude", "/work/erp", "idle", 1000));
+    server.claude_session(reused, registered("s-left", "/work/old", "busy", 2000));
+
+    let live = server.live().await;
+
+    let ids: Vec<&Value> = live["live"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| &item["id"])
+        .collect();
+    assert_eq!(ids, vec!["s-claude"]);
 }
 
 #[tokio::test]
