@@ -640,6 +640,8 @@ async fn a_registry_entry_whose_pid_now_belongs_to_another_program_is_not_live()
     let reused = server.other_program_pid();
     server.claude_session(claude, registered("s-claude", "/work/erp", "idle", 1000));
     server.claude_session(reused, registered("s-left", "/work/old", "busy", 2000));
+    let left = finished_conversation("s-left", "/work/old", "匯出報表", None);
+    server.aged_transcript("-work-old", "s-left", &left, HOUR);
 
     let live = server.live().await;
 
@@ -650,6 +652,7 @@ async fn a_registry_entry_whose_pid_now_belongs_to_another_program_is_not_live()
         .map(|item| &item["id"])
         .collect();
     assert_eq!(ids, vec!["s-claude"]);
+    assert_eq!(live["recent"][0]["id"], "s-left");
 }
 
 #[tokio::test]

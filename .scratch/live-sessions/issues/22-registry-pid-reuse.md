@@ -10,4 +10,4 @@
 
 **Spec:** ../spec.md
 
-- [x] 決定以程式名稱判斷，並加測試：與關閉、暫停判斷用同一個 `process::inspect`，macOS 也適用；不用 `procStart`，因為 macOS 上的格式未確認，且舊版 Claude Code 的登記檔沒有這個欄位。pid 被別的 `claude` 拿到的情況不必處理：新的 Claude Code 會寫同一個 `<pid>.json`，蓋掉舊的登記檔。
+- [x] 決定以程式名稱判斷（`kill(pid, 0)` 先篩，pid 還在的才查名稱），並加測試：與關閉、暫停判斷用同一個 `process::inspect`，macOS 也適用；不用 `procStart`，因為 macOS 上的格式未確認，且舊版 Claude Code 的登記檔沒有這個欄位。pid 被別的 `claude` 拿到的情況不必處理：新的 Claude Code 會寫同一個 `<pid>.json`，蓋掉舊的登記檔。

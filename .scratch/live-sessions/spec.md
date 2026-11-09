@@ -159,7 +159,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 **Claude Code**
 - 還開著的 session 清單來自 Claude Code 自己維護的 session 登記資料夾：每個執行中的 Claude Code 一個 JSON 檔，含程序 id、session id、資料夾、名稱、狀態（busy／idle／shell）、更新時間。該資料夾尊重 `CLAUDE_DIR` 覆寫。
 - 該資料夾內的 `.key` 檔是機密，任何情況都不得開啟、讀取或列出內容。
-- 每筆都要再確認程序還活著，而且程式名稱（argv[0] 的最後一段）是 `claude`；已死掉的登記檔視為已結束，不顯示在「進行中」。Claude Code 被強制結束時登記檔會留下，之後系統可能把同一個 pid 給別的程式，只看 pid 在不在會把舊 session 當成還開著。實際碰過的情況：WSL 重開後，舊登記檔的 pid 被給了一直在跑的 `/init`，卡片停在「工作中」，找不到分頁也沒有關閉鈕。Linux 讀 `/proc`，macOS 每筆執行一次 `/bin/ps`。
+- 每筆都要再確認程序還活著，而且程式名稱（argv[0] 的最後一段）是 `claude`；已死掉的登記檔視為已結束，不顯示在「進行中」。Claude Code 被強制結束時登記檔會留下，之後系統可能把同一個 pid 給別的程式，只看 pid 在不在會把舊 session 當成還開著。實際碰過的情況：WSL 重開後，舊登記檔的 pid 被給了一直在跑的 `/init`，卡片停在「工作中」，找不到分頁也沒有關閉鈕。先以 `kill(pid, 0)` 篩掉 pid 已不在的（登記資料夾常留著幾十個舊檔），還在的才查程式名稱，查法與暫停、關閉的判斷相同：Linux 讀 `/proc`，macOS 用 `/bin/ps`。
 - 名稱與分頁標題一致：對話紀錄的 custom-title（自己取的名字）優先，沒有就用 ai-title（Claude Code 自動產生的標題），都沒有才用登記檔的 name。沒取名時，登記檔的 name 是「資料夾-代號」形式的自動代號（nameSource 為 derived），對不上分頁標題。兩種標題紀錄會反覆寫入且彼此交錯，所以不能取「最後一筆標題」。
 - 狀態對應：busy 與 shell 顯示「工作中」，idle 顯示「閒置」；若對話紀錄顯示有 AskUserQuestion 或 ExitPlanMode 的呼叫還沒有收到對應結果，則顯示「等你回覆」，且優先於登記檔的狀態。
 - 對話紀錄位置：專案資料夾下以「工作資料夾路徑中非英數字元換成連字號」命名的子資料夾，檔名為 session id。
