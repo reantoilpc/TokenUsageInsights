@@ -1,15 +1,16 @@
 //! 「進行中」即時 session 頁面的整合測試。
 //!
 //! 唯一的測試接縫是真正編好的程式的 HTTP API：啟動 binary、指到暫存資料夾，
-//! 並把假的 `ps`／`lsof`／`osascript` 放在 PATH 最前面（腳本依劇本回答，並記錄收到的參數）。
+//! 並把假的 `ps`／`lsof`／`osascript`／`powershell.exe` 等放在 PATH 最前面（腳本依劇本回答，並記錄收到的參數）。
 //! 輔助程式刻意獨立於 `additional_sources.rs`，避免與上游對該檔的修改衝突。
 //!
 //! 只在 Unix 編譯：假指令是 `/bin/sh` 腳本、agent 以 `exec -a` 與訊號模擬，原生 Windows 跑不了；
-//! Windows 上的「進行中」是在 WSL 裡執行（見 `.scratch/live-sessions/spec.md`），由 Linux 這組測試涵蓋。
+//! Windows 上的「進行中」是在 WSL 裡執行（見 `.scratch/live-sessions/spec.md`），由 Unix（Linux／macOS）上這組測試涵蓋。
 #![cfg(unix)]
 
 use serde_json::{json, Value};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -60,11 +61,7 @@ impl FakeCommands {
             ),
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     /// 假指令被呼叫時收到的參數：每次呼叫一組。
