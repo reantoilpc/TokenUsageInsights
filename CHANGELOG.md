@@ -4,6 +4,58 @@
 
 ## [未發行]
 
+## [1.6.5] - 2026-11-06
+
+本次 patch release 擴充缺少價格規則時的靜默清單，減少內部工具模型與無法識別模型造成的日誌雜訊。
+
+### 修正
+
+- 擴充缺少價格規則時的靜默清單：內部工具模型 `copilot-search-a` 與無法識別的 `Unknown Model` 會保留 Token 用量統計，並略過「計算成本失敗」的重複提示，與既有的 `copilot-search-b` 行為一致；其他缺少價格規則的模型仍會提示。
+
+### 資料影響
+
+- 僅調整日誌提示行為：Token 用量統計與成本計算結果不變。
+
+### 相容性
+
+- 未變更 SQLite 資料表結構、API、環境變數或安裝流程。
+
+## [1.6.4] - 2026-11-05
+
+本次 patch release 補上 Kimi K3.1 Pro 定價規則，修正其使用量被套用 Kimi K3 費率而高估約五成的問題。
+
+### 修正
+
+- 補上 Kimi K3.1 Pro（`kimi-k3.1-pro`）的定價規則：先前該模型的使用量會被包含比對套用 Kimi K3 費率（輸入 3.00、快取輸入 0.30、輸出 15.00 美元），高估約五成。依 Ollama 與 Kimi 官方公布費率新增 `Kimi K3.1 Pro` 與 `kimi-k3.1-pro` 雙格式規則（輸入 2.00、快取輸入 0.20、輸出 10.00 美元／每百萬 tokens），`kimi-k3.1-pro:cloud` 等名稱亦可正確計價。
+
+### 資料影響
+
+- 僅新增費率規則：`kimi-k3.1-pro` 相關 session 的費用估算會改用新費率計算，其他模型的估算結果不變。
+
+### 相容性
+
+- 未變更 SQLite 資料表結構、API 或執行期環境變數。
+
+## [1.6.3] - 2026-11-03
+
+本次 patch release 新增小米 MiMo-V2.6 系列模型定價規則，補齊對應 session 的費用估算。
+
+### 新增與改善
+
+- `pricing.csv` 新增小米 MiMo-V2.6 系列 `mimo-v2.6-pro` 與 `mimo-v2.6-flash` 的標準費率規則，讓對應 session 的成本估算不再擲回「找不到可用的模型價格規則」。定價採小米 MiMo 官方牌價（Pro：輸入 0.435、快取輸入 0.0036、輸出 0.87；Flash：輸入 0.14、快取輸入 0.0028、輸出 0.28 美元／每百萬 tokens），並新增單元測試驗證小寫 API 型號（`mimo-v2.6-pro`）、大小寫變體（`MiMo-V2.6-Pro`）與前綴變體（`xiaomi/mimo-v2.6-pro`）等名稱格式皆能正確套用定價。
+
+### 變更
+
+- `.gitignore` 排除本地 JSON 設定檔，僅影響開發端儲存庫整潔，不影響執行期行為。
+
+### 資料影響
+
+- 僅新增費率規則：使用 MiMo-V2.6 系列的 session 會開始產生費用估算，其他模型的估算結果不變。
+
+### 相容性
+
+- 未變更 SQLite 資料表結構、API 或執行期環境變數。
+
 ## [1.6.2] - 2026-10-29
 
 本次 patch release 新增週／自訂區間分析與 Antigravity 子代理資訊，並更新官方模型定價及看板修正。
@@ -1079,7 +1131,10 @@
 - 修正行動版側邊欄遮擋、黑畫面、標題擠壓、圖表導覽索引與年度版面問題。
 - 修正並補齊多個 Gemini、Claude、GPT 與 GPT-OSS 模型的定價規則。
 
-[未發行]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.2...HEAD
+[未發行]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.5...HEAD
+[1.6.5]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.4...v1.6.5
+[1.6.4]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.3...v1.6.4
+[1.6.3]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.1...v1.6.2
 [1.1.0]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.0.6...v1.1.0
 [1.0.6]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.0.5...v1.0.6
