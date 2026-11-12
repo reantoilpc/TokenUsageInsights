@@ -755,6 +755,58 @@ mod tests {
     }
 
     #[test]
+    fn mimo_v2_6_pro_uses_packaged_pricing() {
+        let rules = load_pricing_rules();
+
+        for model_name in ["mimo-v2.6-pro", "MiMo-V2.6-Pro", "xiaomi/mimo-v2.6-pro"] {
+            let cost = calculate_usage_cost(
+                &rules,
+                Some(model_name),
+                1_000_000,
+                1_000_000,
+                1_000_000,
+                0,
+                0,
+            )
+            .unwrap_or_else(|error| panic!("{model_name} should have a pricing rule: {error}"));
+
+            // Input 0.435 + cache read 0.0036 + output 0.87 = 1.3086.
+            assert!(
+                (cost - 1.3086).abs() < 1e-12,
+                "unexpected MiMo-V2.6-Pro cost for {model_name}: {cost}"
+            );
+        }
+    }
+
+    #[test]
+    fn mimo_v2_6_flash_uses_packaged_pricing() {
+        let rules = load_pricing_rules();
+
+        for model_name in [
+            "mimo-v2.6-flash",
+            "MiMo-V2.6-Flash",
+            "xiaomi/mimo-v2.6-flash",
+        ] {
+            let cost = calculate_usage_cost(
+                &rules,
+                Some(model_name),
+                1_000_000,
+                1_000_000,
+                1_000_000,
+                0,
+                0,
+            )
+            .unwrap_or_else(|error| panic!("{model_name} should have a pricing rule: {error}"));
+
+            // Input 0.14 + cache read 0.0028 + output 0.28 = 0.4228.
+            assert!(
+                (cost - 0.4228).abs() < 1e-12,
+                "unexpected MiMo-V2.6-Flash cost for {model_name}: {cost}"
+            );
+        }
+    }
+
+    #[test]
     fn gpt_6_astra_context_tiers_use_packaged_pricing() {
         let rules = load_pricing_rules();
 
@@ -1425,6 +1477,28 @@ mod tests {
             .expect("kimi-k3 should have a pricing rule");
         // input 3.00 + output 15.00 = 18.00
         assert!((cost - 18.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kimi_k3_1_pro_resolves_pricing_from_csv() {
+        let rules = load_prepared_pricing_rules();
+
+        for model_name in ["kimi-k3.1-pro", "kimi-k3.1-pro:cloud", "Kimi K3.1 Pro"] {
+            for (input, output, cache_read, expected) in [
+                (1_000_000, 0, 0, 2.00),
+                (0, 0, 1_000_000, 0.20),
+                (0, 1_000_000, 0, 10.00),
+                (1_000_000, 1_000_000, 1_000_000, 12.20),
+            ] {
+                let cost = rules
+                    .calculate_cost(model_name, input, output, cache_read, 0, 0)
+                    .expect("kimi-k3.1-pro should have a pricing rule");
+                assert!(
+                    (cost - expected).abs() < 1e-12,
+                    "unexpected cost for {model_name}: {cost}, expected {expected}"
+                );
+            }
+        }
     }
 
     #[test]
