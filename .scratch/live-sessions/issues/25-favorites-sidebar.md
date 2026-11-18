@@ -6,7 +6,7 @@
 
 **Blocked by:** 24
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 **Spec:** ../spec.md
 

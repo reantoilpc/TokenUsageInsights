@@ -2,15 +2,15 @@
 
 **What to build:** 讓收藏超過 24 小時的 session 也查得到、接續得了。前端把收藏的 `agent:id` 交給 `GET /api/live`，後端回傳每一筆的資料與狀態（還開著、已結束、接續不了），並把收藏從「最近結束」排除、不佔 10 筆名額。`POST /api/live/resume` 改成依 id 查已結束的 session，不再限於「最近結束」清單。
 
-使用者 2026-11-18 選定需求（grilling 三輪）。細節見規格的「實作決策 → 收藏」。下面的技術做法核准前不實作。
+使用者 2026-11-18 選定需求與技術做法（grilling 四輪）：T1 A、T2 A、T4 A；T3 為實作細節。細節見規格的「實作決策 → 收藏」。
 
 **Blocked by:** —
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 **Spec:** ../spec.md
 
-## 待核准的技術做法
+## 技術做法（已核准，建議選項即定案）
 
 ### T1：前端怎麼把收藏交給後端
 
