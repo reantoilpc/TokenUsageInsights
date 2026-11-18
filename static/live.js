@@ -5,7 +5,17 @@ import { parsePins, prunePins, togglePin } from './pin-utils.js';
 import { orderCards, parsePriorities, priorityOf, prunePriorities, setPriority } from './priority-utils.js';
 import { contextLabel } from './context-utils.js';
 import { CONFIRM_MS, closeNotice, isArmed, pressClose } from './close-utils.js';
-import { cleanupWarning, dropGone, favoritesQuery, isFavorite, parseFavorites, toggleFavorite } from './favorite-utils.js';
+import {
+  cleanupWarning,
+  dropGone,
+  favoriteRows,
+  favoritesQuery,
+  isFavorite,
+  parseFavorites,
+  parseSidebar,
+  toggleFavorite,
+} from './favorite-utils.js';
+import { ago } from './relative-time-utils.js';
 
 const POLL_MS = 3000;
 let timer = null;
@@ -61,15 +71,6 @@ function element(tag, className, text) {
   node.className = className;
   if (text) node.textContent = text;
   return node;
-}
-
-function ago(ms) {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s 前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m 前`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h 前` : `${Math.floor(hours / 24)}d 前`; // 收藏常是幾天前結束的
 }
 
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
@@ -478,24 +479,20 @@ function renderProgress({ done, total, current }) {
   return row;
 }
 
-// 左側收藏清單：依收藏先後（新的在上）。後端還沒回這一筆的資料時（剛收藏、或暫時讀不到）用收藏時記下的名稱
 const favoritesPanel = document.getElementById('favorites-panel');
 const favoritesList = document.getElementById('favorites-list');
 const favoritesEmpty = document.getElementById('favorites-empty');
 const favoritesToggle = document.getElementById('favorites-toggle');
 const narrowScreen = window.matchMedia('(max-width: 720px)');
-const DEFAULT_CLEANUP_DAYS = 30;
 
+// 左側收藏清單：依收藏先後，新的在上
 function renderFavorites(data, priorities) {
   const favorites = favoriteStore.load();
-  const byKey = new Map((data.favorites ?? []).map((item) => [cardKey(item), item]));
   favoritesEmpty.hidden = favorites.length > 0;
   favoritesList.replaceChildren(
-    ...favorites.map((favorite) => {
-      const [agent, id] = favorite.key.split(/:(.*)/);
-      const item = byKey.get(favorite.key) ?? { agent, id, state: 'unknown', name: favorite.name };
-      return renderFavoriteRow(item, priorityOf(priorities, item), data.claudeCleanupDays ?? DEFAULT_CLEANUP_DAYS);
-    }),
+    ...favoriteRows(favorites, data.favorites ?? []).map((item) =>
+      renderFavoriteRow(item, priorityOf(priorities, item), data.claudeCleanupDays),
+    ),
   );
 }
 
@@ -533,7 +530,7 @@ function openFavorite(item) {
 }
 
 // 收合狀態只記寬螢幕上的選擇：窄螢幕上清單會蓋住卡片，一律從收起來開始
-const sidebarStore = localStore('live-sidebar', (text) => (text === '"open"' || text === '"collapsed"' ? JSON.parse(text) : null), null);
+const sidebarStore = localStore('live-sidebar', parseSidebar, null);
 
 function setSidebarOpen(open, { remember = false } = {}) {
   favoritesPanel.hidden = !open;

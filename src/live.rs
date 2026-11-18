@@ -95,21 +95,66 @@ enum Lookup {
     Unknown,
 }
 
-/// 收藏的 session 現況。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Favorite {
     agent: &'static str,
     id: String,
-    /// open：還開著；ended：可以接續；gone：確定接續不了（原因見 reason）；unknown：暫時讀不到。
-    state: &'static str,
+    state: FavoriteState,
+    /// 只有 gone 才有：確定接續不了的原因，前端移除收藏時告訴我。
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// gone 與 unknown 沒有。
+    #[serde(flatten)]
+    summary: Option<Summary>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum FavoriteState {
+    /// 還開著，點了跳轉。
+    Open,
+    /// 已結束，可以接續。
+    Ended,
+    /// 確定接續不了，前端會移除收藏。
+    Gone,
+    /// 暫時讀不到，前端不移除。
+    Unknown,
+}
+
+/// 收藏清單每一筆顯示的內容，取自「進行中」或已結束的 session。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Summary {
     name: Option<String>,
-    folder: Option<String>,
+    folder: String,
     last_prompt: Option<String>,
     prompt_at: Option<u64>,
-    updated_at: Option<u64>,
+    updated_at: u64,
+}
+
+impl From<&LiveSession> for Summary {
+    fn from(session: &LiveSession) -> Self {
+        Summary {
+            name: session.name.clone(),
+            folder: session.folder.clone(),
+            last_prompt: session.last_prompt.clone(),
+            prompt_at: session.prompt_at,
+            updated_at: session.updated_at,
+        }
+    }
+}
+
+impl From<EndedSession> for Summary {
+    fn from(session: EndedSession) -> Self {
+        Summary {
+            name: session.name,
+            folder: session.folder,
+            last_prompt: session.last_prompt,
+            prompt_at: session.prompt_at,
+            updated_at: session.updated_at,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -171,37 +216,23 @@ fn favorites(live: &[LiveSession], wanted: Vec<(&'static str, String)>) -> Vec<F
     wanted
         .into_iter()
         .map(|(agent, id)| {
-            if let Some(open) = live
+            let open = live
                 .iter()
-                .find(|session| session.agent == agent && session.id == id)
-            {
-                return Favorite {
-                    agent,
-                    id,
-                    state: "open",
-                    reason: None,
-                    name: open.name.clone(),
-                    folder: Some(open.folder.clone()),
-                    last_prompt: open.last_prompt.clone(),
-                    prompt_at: open.prompt_at,
-                    updated_at: Some(open.updated_at),
-                };
-            }
-            let (state, reason, ended) = match with_existing_folder(find_ended(agent, &id)) {
-                Lookup::Found(ended) => ("ended", None, Some(ended)),
-                Lookup::Gone(reason) => ("gone", Some(reason), None),
-                Lookup::Unknown => ("unknown", None, None),
+                .find(|session| session.agent == agent && session.id == id);
+            let (state, reason, summary) = match open {
+                Some(open) => (FavoriteState::Open, None, Some(Summary::from(open))),
+                None => match with_existing_folder(find_ended(agent, &id)) {
+                    Lookup::Found(ended) => (FavoriteState::Ended, None, Some(ended.into())),
+                    Lookup::Gone(reason) => (FavoriteState::Gone, Some(reason), None),
+                    Lookup::Unknown => (FavoriteState::Unknown, None, None),
+                },
             };
             Favorite {
                 agent,
                 id,
                 state,
                 reason,
-                name: ended.as_ref().and_then(|ended| ended.name.clone()),
-                folder: ended.as_ref().map(|ended| ended.folder.clone()),
-                last_prompt: ended.as_ref().and_then(|ended| ended.last_prompt.clone()),
-                prompt_at: ended.as_ref().and_then(|ended| ended.prompt_at),
-                updated_at: ended.as_ref().map(|ended| ended.updated_at),
+                summary,
             }
         })
         .collect()
