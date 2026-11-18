@@ -95,6 +95,17 @@ enum Lookup {
     Unknown,
 }
 
+impl Lookup {
+    /// 檔案不存在才算確定接續不了；權限不足等其他錯誤只是暫時讀不到。
+    fn from_io_error(error: &std::io::Error, reason: &'static str) -> Lookup {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Lookup::Gone(reason)
+        } else {
+            Lookup::Unknown
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Favorite {
@@ -254,8 +265,7 @@ fn with_existing_folder(lookup: Lookup) -> Lookup {
     };
     match std::fs::metadata(&ended.cwd) {
         Ok(_) => Lookup::Found(ended),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Lookup::Gone(FOLDER_GONE),
-        Err(_) => Lookup::Unknown,
+        Err(error) => Lookup::from_io_error(&error, FOLDER_GONE),
     }
 }
 

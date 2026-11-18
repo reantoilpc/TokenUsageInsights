@@ -13,6 +13,7 @@ import {
   isFavorite,
   parseFavorites,
   parseSidebar,
+  removedNotice,
   toggleFavorite,
 } from './favorite-utils.js';
 import { ago } from './relative-time-utils.js';
@@ -579,11 +580,11 @@ async function refresh() {
       removed = result.removed;
       return result.kept;
     });
-    if (removed.length > 0) {
-      notify(removed.map(({ name, reason }) => `已移除收藏「${name || '未命名'}」：${reason}`).join('；'));
-    }
-    pinStore.update((pins) => prunePins(pins, data.live, data.recent, data.favorites ?? []));
-    priorityStore.update((priorities) => prunePriorities(priorities, data.live, data.recent, data.favorites ?? []));
+    if (removed.length > 0) notify(removedNotice(removed));
+    // 以本機的收藏清單判斷：後端最多只查 50 筆，較舊的收藏不在回應裡，釘選與優先度仍要留著
+    const favorites = favoriteRows(favoriteStore.load(), data.favorites ?? []);
+    pinStore.update((pins) => prunePins(pins, data.live, data.recent, favorites));
+    priorityStore.update((priorities) => prunePriorities(priorities, data.live, data.recent, favorites));
     render(data);
   } catch {
     status.textContent = '無法取得資料，稍後重試';

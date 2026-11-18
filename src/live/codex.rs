@@ -460,8 +460,7 @@ pub fn ended(codex_dir: &Path, id: &str) -> Lookup {
     }
     match std::fs::metadata(&thread.rollout_path) {
         Ok(_) => Lookup::Found(ended_session(thread)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Lookup::Gone(TRANSCRIPT_GONE),
-        Err(_) => Lookup::Unknown,
+        Err(error) => Lookup::from_io_error(&error, TRANSCRIPT_GONE),
     }
 }
 

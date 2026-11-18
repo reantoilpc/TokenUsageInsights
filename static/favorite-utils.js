@@ -1,7 +1,7 @@
 // 收藏：讓 session 不受「最近結束」24 小時、10 筆的限制，隔幾天還能接續。
 // 存成 { key: 'agent:id', name, folder, addedAt } 的陣列，新收藏的放最前面。
 // 名稱與資料夾是上一次拿到的資料：後端暫時讀不到時照樣顯示。
-import { cardKey } from './card-utils.js';
+import { cardKey, parseCardKey } from './card-utils.js';
 
 const DAY_MS = 24 * 3600 * 1000;
 // Claude Code 依 cleanupPeriodDays 刪除舊對話紀錄，最後一週開始提醒
@@ -52,8 +52,12 @@ export function favoritesQuery(favorites) {
 
 // 只移除後端確定接續不了（gone）的；讀不到（unknown）或這次沒回來的都留著，
 // 一次暫時的錯誤不能把收藏清掉。留下的順便記住最新的名稱與資料夾，讀不到時與提示時用得到
+function byCardKey(items) {
+  return new Map(items.map((item) => [cardKey(item), item]));
+}
+
 export function dropGone(favorites, fromServer) {
-  const byKey = new Map(fromServer.map((item) => [cardKey(item), item]));
+  const byKey = byCardKey(fromServer);
   const kept = [];
   const removed = [];
   for (const favorite of favorites) {
@@ -69,19 +73,17 @@ export function dropGone(favorites, fromServer) {
 
 // 左側清單每一列，依收藏先後。後端讀不到或還沒回這一筆時，用上一次記下的名稱與資料夾
 export function favoriteRows(favorites, fromServer) {
-  const byKey = new Map(fromServer.map((item) => [cardKey(item), item]));
+  const byKey = byCardKey(fromServer);
   return favorites.map((favorite) => {
     const item = byKey.get(favorite.key);
     if (item && item.state !== 'unknown') return item;
-    const separator = favorite.key.indexOf(':');
-    return {
-      agent: favorite.key.slice(0, separator),
-      id: favorite.key.slice(separator + 1),
-      state: 'unknown',
-      name: favorite.name,
-      folder: favorite.folder,
-    };
+    return { ...parseCardKey(favorite.key), state: 'unknown', name: favorite.name, folder: favorite.folder };
   });
+}
+
+// 自動移除時頂端的提示，一次可能移除好幾筆
+export function removedNotice(removed) {
+  return removed.map(({ name, reason }) => `已移除收藏「${name || '未命名'}」：${reason}`).join('；');
 }
 
 // 收合狀態：'open'、'collapsed'，沒記過是 null

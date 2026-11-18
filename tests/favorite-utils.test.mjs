@@ -9,6 +9,7 @@ import {
   isFavorite,
   parseFavorites,
   parseSidebar,
+  removedNotice,
   toggleFavorite,
 } from '../static/favorite-utils.js';
 
@@ -107,6 +108,16 @@ test('rows follow the favorite order; unreadable or missing ones show the last k
     { agent: 'claude', id: 'unknown', state: 'unknown', name: '登入頁修正', folder: 'erp' },
     { agent: 'codex', id: 'not-yet', state: 'unknown', name: '剛收藏', folder: 'mango' },
   ]);
+});
+
+test('the removal notice names every removed favorite and why, with a fallback for unnamed ones', () => {
+  assert.equal(
+    removedNotice([
+      { name: '帳單匯出', reason: '對話紀錄不存在' },
+      { name: null, reason: '資料夾不存在' },
+    ]),
+    '已移除收藏「帳單匯出」：對話紀錄不存在；已移除收藏「未命名」：資料夾不存在',
+  );
 });
 
 test('the remembered sidebar state is open, collapsed, or nothing', () => {
