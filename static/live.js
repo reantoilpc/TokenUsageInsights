@@ -5,6 +5,18 @@ import { parsePins, prunePins, togglePin } from './pin-utils.js';
 import { orderCards, parsePriorities, priorityOf, prunePriorities, setPriority } from './priority-utils.js';
 import { contextLabel } from './context-utils.js';
 import { CONFIRM_MS, closeNotice, isArmed, pressClose } from './close-utils.js';
+import {
+  cleanupWarning,
+  dropGone,
+  favoriteRows,
+  favoritesQuery,
+  isFavorite,
+  parseFavorites,
+  parseSidebar,
+  removedNotice,
+  toggleFavorite,
+} from './favorite-utils.js';
+import { ago } from './relative-time-utils.js';
 
 const POLL_MS = 3000;
 let timer = null;
@@ -62,13 +74,6 @@ function element(tag, className, text) {
   return node;
 }
 
-function ago(ms) {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s 前`;
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? `${minutes}m 前` : `${Math.floor(minutes / 60)}h 前`;
-}
-
 // 一律用 textContent：名稱與資料夾來自對話紀錄，視為不可信輸入
 function renderCard(session, pinned, priority) {
   const card = element('article', `live-card live-status-${session.status}${pinned ? ' live-pinned' : ''}`);
@@ -90,7 +95,7 @@ function renderCard(session, pinned, priority) {
   // 閒置時只留給螢幕閱讀器，見 live.css
   side.append(element('span', 'live-card-state', `● ${state}`));
   if (session.agent === 'claude') side.append(renderRenameButton(session)); // Codex 沒有對應的 /rename
-  side.append(renderPriorityButton(session, priority), renderPinButton(session, pinned));
+  side.append(renderPriorityButton(session, priority), renderFavoriteButton(session), renderPinButton(session, pinned));
   if (session.status !== 'working') side.append(renderCloseButton(session)); // 工作中被關會中斷正在跑的回合
   head.append(renderTitle(session.name || session.folder, priority), side);
   card.append(head);
@@ -171,6 +176,25 @@ function localStore(key, parse, initial) {
 
 const pinStore = localStore('live-pins', parsePins, []);
 const priorityStore = localStore('live-priorities', parsePriorities, {});
+const favoriteStore = localStore('live-favorites', parseFavorites, []);
+
+// 卡片與「最近結束」上的 ☆：收藏後關掉分頁，隔幾天還能從左側清單接續
+function renderFavoriteButton(session) {
+  const saved = isFavorite(favoriteStore.load(), session);
+  const button = element('button', 'live-favorite', saved ? '★' : '☆');
+  button.type = 'button';
+  button.dataset.key = `favorite:${cardKey(session)}`;
+  button.setAttribute('aria-pressed', String(saved));
+  button.setAttribute('aria-label', '收藏');
+  button.title = saved ? '取消收藏' : '收藏（關掉分頁後隔幾天也能從左側接續）';
+  button.addEventListener('click', (event) => {
+    event.stopPropagation(); // 點卡片本身是跳轉
+    favoriteStore.update((favorites) => toggleFavorite(favorites, session, Date.now()));
+    if (lastData) render(lastData);
+    refresh(); // 收藏的 session 要從「最近結束」移到左側清單，不等下一次輪詢
+  });
+  return button;
+}
 
 function renderPinButton(session, pinned) {
   const button = element('button', 'live-pin', '📌');
@@ -426,7 +450,9 @@ function recentTitle(item) {
 function renderRecent(item, priority) {
   const row = element('article', 'live-card live-recent');
   const head = element('div', 'live-card-head');
-  head.append(renderTitle(recentTitle(item), priority));
+  const side = element('span', 'live-card-side');
+  side.append(renderFavoriteButton(item));
+  head.append(renderTitle(recentTitle(item), priority), side);
   const foot = element('div', 'live-card-foot');
   if (item.lastPrompt) foot.append(element('span', 'live-card-prompt', item.lastPrompt));
   foot.append(element('span', 'live-card-time', ago(Date.now() - item.updatedAt)));
@@ -454,6 +480,72 @@ function renderProgress({ done, total, current }) {
   return row;
 }
 
+const favoritesPanel = document.getElementById('favorites-panel');
+const favoritesList = document.getElementById('favorites-list');
+const favoritesEmpty = document.getElementById('favorites-empty');
+const favoritesToggle = document.getElementById('favorites-toggle');
+const narrowScreen = window.matchMedia('(max-width: 720px)');
+
+// 左側收藏清單：依收藏先後，新的在上
+function renderFavorites(data, priorities) {
+  const favorites = favoriteStore.load();
+  favoritesEmpty.hidden = favorites.length > 0;
+  favoritesList.replaceChildren(
+    ...favoriteRows(favorites, data.favorites ?? []).map((item) =>
+      renderFavoriteRow(item, priorityOf(priorities, item), data.claudeCleanupDays),
+    ),
+  );
+}
+
+function renderFavoriteRow(item, priority, cleanupDays) {
+  const row = element('article', `live-favorite-row live-favorite-${item.state}`);
+  row.dataset.key = `favorite-row:${cardKey(item)}`;
+  row.tabIndex = 0;
+  row.setAttribute('role', 'button');
+  row.title = item.state === 'open' ? '跳到這個 session 的終端機分頁' : item.state === 'ended' ? '接續這個 session' : '暫時讀不到這個 session';
+  row.addEventListener('click', () => openFavorite(item));
+  row.addEventListener('keydown', (event) => {
+    if (event.target !== row) return; // ★ 自己處理
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openFavorite(item);
+    }
+  });
+  const head = element('div', 'live-favorite-head');
+  head.append(renderTitle(recentTitle(item) || '（未命名）', priority));
+  if (item.state === 'open') head.append(element('span', 'live-favorite-badge', '進行中'));
+  head.append(renderFavoriteButton(item));
+  const meta = [item.folder, AGENT_TAG[item.agent], item.updatedAt ? ago(Date.now() - item.updatedAt) : null];
+  if (item.state === 'unknown') meta.push('暫時讀不到');
+  row.append(head, element('div', 'live-favorite-meta', meta.filter(Boolean).join(' · ')));
+  const warning = cleanupWarning(item, cleanupDays, Date.now());
+  if (warning) row.append(element('div', 'live-favorite-warning', warning));
+  return row;
+}
+
+function openFavorite(item) {
+  if (item.state === 'open') focusSession(item);
+  else if (item.state === 'ended') resumeSession(item);
+  else notify('暫時讀不到這個 session，稍後再試');
+  if (narrowScreen.matches) setSidebarOpen(false); // 窄螢幕上清單蓋住卡片，用完就收起來
+}
+
+// 收合狀態只記寬螢幕上的選擇：窄螢幕上清單會蓋住卡片，一律從收起來開始
+const sidebarStore = localStore('live-sidebar', parseSidebar, null);
+
+function setSidebarOpen(open, { remember = false } = {}) {
+  favoritesPanel.hidden = !open;
+  favoritesToggle.setAttribute('aria-expanded', String(open));
+  if (remember && !narrowScreen.matches) sidebarStore.update(() => (open ? 'open' : 'collapsed'));
+}
+
+favoritesToggle.addEventListener('click', () => setSidebarOpen(favoritesPanel.hidden, { remember: true }));
+document.getElementById('favorites-collapse').addEventListener('click', () => {
+  setSidebarOpen(false, { remember: true });
+  favoritesToggle.focus();
+});
+setSidebarOpen(!narrowScreen.matches && sidebarStore.load() !== 'collapsed');
+
 function render(data) {
   lastData = data;
   const pins = pinStore.load();
@@ -468,6 +560,7 @@ function render(data) {
   );
   recentEmpty.hidden = data.recent.length > 0;
   recentList.replaceChildren(...data.recent.map((item) => renderRecent(item, priorityOf(priorities, item))));
+  renderFavorites(data, priorities);
   if (focusedKey) document.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
   status.textContent = '';
   syncPriorityMenu(); // 狀態文字清掉後標題列可能變矮，卡片跟著上移
@@ -475,12 +568,23 @@ function render(data) {
 
 async function refresh() {
   try {
-    const response = await fetch('/api/live', { cache: 'no-store' });
+    const query = favoritesQuery(favoriteStore.load());
+    const url = query ? `/api/live?favorites=${encodeURIComponent(query)}` : '/api/live';
+    const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    // 只在成功取得時清理，連線失敗不會動到釘選與優先度
-    pinStore.update((pins) => prunePins(pins, data.live, data.recent));
-    priorityStore.update((priorities) => prunePriorities(priorities, data.live, data.recent));
+    // 只在成功取得時清理，連線失敗不會動到釘選、優先度與收藏
+    let removed = [];
+    favoriteStore.update((favorites) => {
+      const result = dropGone(favorites, data.favorites ?? []);
+      removed = result.removed;
+      return result.kept;
+    });
+    if (removed.length > 0) notify(removedNotice(removed));
+    // 以本機的收藏清單判斷：後端最多只查 50 筆，較舊的收藏不在回應裡，釘選與優先度仍要留著
+    const favorites = favoriteRows(favoriteStore.load(), data.favorites ?? []);
+    pinStore.update((pins) => prunePins(pins, data.live, data.recent, favorites));
+    priorityStore.update((priorities) => prunePriorities(priorities, data.live, data.recent, favorites));
     render(data);
   } catch {
     status.textContent = '無法取得資料，稍後重試';

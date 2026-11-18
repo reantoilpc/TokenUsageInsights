@@ -4,3 +4,4 @@ node_modules/
 npm/token-usage-insights-bin/
 token-usage-insights-*.tgz
 *.local.json
+.gstack/

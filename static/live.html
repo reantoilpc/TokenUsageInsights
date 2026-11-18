@@ -9,31 +9,42 @@
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
   </script>
   <link rel="stylesheet" href="/static/styles.css?v=37">
-  <link rel="stylesheet" href="/static/live.css?v=15">
+  <link rel="stylesheet" href="/static/live.css?v=16">
 </head>
 <body>
-  <main class="live-main">
-    <header class="live-header">
-      <a class="live-back" href="/">← Token 戰情室</a>
-      <h1>進行中</h1>
-      <span id="live-notice" class="live-status live-notice" role="alert"></span>
-      <span id="live-status" class="live-status" role="status"></span>
-    </header>
-    <section aria-label="進行中的 session">
-      <div id="live-cards" class="live-cards"></div>
-      <p id="live-empty" class="live-empty" hidden>目前沒有進行中的 session</p>
-    </section>
-    <section aria-label="最近結束">
-      <h2 class="live-section-title">最近結束</h2>
-      <div id="recent-list" class="live-cards"></div>
-      <p id="recent-empty" class="live-empty live-empty-small" hidden>24 小時內沒有結束的 session</p>
-    </section>
-    <div id="priority-menu" class="live-priority-menu" role="group" aria-label="優先度" hidden>
-      <button type="button" data-level="high">高</button>
-      <button type="button" data-level="normal">一般</button>
-      <button type="button" data-level="low">低</button>
-    </div>
-  </main>
+  <div class="live-layout">
+    <aside id="favorites-panel" class="live-sidebar" aria-label="收藏" hidden>
+      <div class="live-sidebar-head">
+        <h2 class="live-sidebar-title">收藏</h2>
+        <button type="button" id="favorites-collapse" class="live-sidebar-collapse" aria-label="收合收藏清單" title="收合收藏清單">«</button>
+      </div>
+      <div id="favorites-list" class="live-favorites"></div>
+      <p id="favorites-empty" class="live-favorites-empty" hidden>還沒有收藏。在卡片上點 ☆，關掉分頁後隔幾天也能從這裡接續。</p>
+    </aside>
+    <main class="live-main">
+      <header class="live-header">
+        <button type="button" id="favorites-toggle" class="live-favorites-toggle" aria-controls="favorites-panel" aria-expanded="false">★ 收藏</button>
+        <a class="live-back" href="/">← Token 戰情室</a>
+        <h1>進行中</h1>
+        <span id="live-notice" class="live-status live-notice" role="alert"></span>
+        <span id="live-status" class="live-status" role="status"></span>
+      </header>
+      <section aria-label="進行中的 session">
+        <div id="live-cards" class="live-cards"></div>
+        <p id="live-empty" class="live-empty" hidden>目前沒有進行中的 session</p>
+      </section>
+      <section aria-label="最近結束">
+        <h2 class="live-section-title">最近結束</h2>
+        <div id="recent-list" class="live-cards"></div>
+        <p id="recent-empty" class="live-empty live-empty-small" hidden>24 小時內沒有結束的 session</p>
+      </section>
+      <div id="priority-menu" class="live-priority-menu" role="group" aria-label="優先度" hidden>
+        <button type="button" data-level="high">高</button>
+        <button type="button" data-level="normal">一般</button>
+        <button type="button" data-level="low">低</button>
+      </div>
+    </main>
+  </div>
   <dialog id="rename-dialog" class="live-dialog" aria-labelledby="rename-title">
     <form id="rename-form" method="dialog">
       <h2 id="rename-title" class="live-dialog-title">改名</h2>
@@ -50,6 +61,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/static/live.js?v=16"></script>
+  <script type="module" src="/static/live.js?v=18"></script>
 </body>
 </html>

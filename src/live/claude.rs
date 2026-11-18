@@ -3,7 +3,7 @@
 use super::{
     folder_of, process,
     transcript::{self, Prompt},
-    EndedSession, LiveSession, RECENT_LIMIT,
+    EndedSession, LiveSession, Lookup, RECENT_LIMIT, TRANSCRIPT_GONE,
 };
 use serde::Deserialize;
 use std::{
@@ -174,24 +174,65 @@ pub fn recent(claude_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<E
         .into_iter()
         .filter_map(|(updated_at, path)| {
             let id = path.file_stem()?.to_str()?.to_string();
-            let transcript = transcript::read(&path, &transcript::CLAUDE);
-            if transcript.background {
-                return None;
-            }
-            let cwd = transcript.cwd?;
-            let (last_prompt, prompt_at) = Prompt::split(transcript.last_prompt);
-            Some(EndedSession {
-                folder: folder_of(&cwd),
-                cwd,
-                agent: "claude",
-                id,
-                // 與進行中相同：自己取的名字優先，沒取名就用 Claude Code 自動產生的標題
-                name: transcript.title.or(transcript.ai_title),
-                last_prompt,
-                prompt_at,
-                updated_at,
-            })
+            ended_session(&path, id, updated_at)
         })
         .take(RECENT_LIMIT)
         .collect()
+}
+
+/// 不限時間，依 id 找已結束的 session（收藏用）。
+pub fn ended(claude_dir: &Path, id: &str) -> Lookup {
+    let Ok(projects) = std::fs::read_dir(claude_dir.join("projects")) else {
+        return Lookup::Unknown;
+    };
+    let file = format!("{id}.jsonl");
+    for project in projects.flatten() {
+        let path = project.path().join(&file);
+        match std::fs::metadata(&path) {
+            Ok(meta) => {
+                let updated_at = meta
+                    .modified()
+                    .ok()
+                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |elapsed| elapsed.as_millis() as u64);
+                return ended_session(&path, id.to_string(), updated_at)
+                    .map_or(Lookup::Unknown, Lookup::Found);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Lookup::Unknown,
+        }
+    }
+    Lookup::Gone(TRANSCRIPT_GONE)
+}
+
+/// 背景執行（`claude -p`）不算；讀不到工作資料夾時回傳 None。
+fn ended_session(path: &Path, id: String, updated_at: u64) -> Option<EndedSession> {
+    let transcript = transcript::read(path, &transcript::CLAUDE);
+    if transcript.background {
+        return None;
+    }
+    let cwd = transcript.cwd?;
+    let (last_prompt, prompt_at) = Prompt::split(transcript.last_prompt);
+    Some(EndedSession {
+        folder: folder_of(&cwd),
+        cwd,
+        agent: "claude",
+        id,
+        // 與進行中相同：自己取的名字優先，沒取名就用 Claude Code 自動產生的標題
+        name: transcript.title.or(transcript.ai_title),
+        last_prompt,
+        prompt_at,
+        updated_at,
+    })
+}
+
+pub const DEFAULT_CLEANUP_DAYS: u64 = 30;
+
+/// Claude Code 依設定的 `cleanupPeriodDays` 刪除舊對話紀錄，收藏要在那之前提醒；只讀不改。
+pub fn cleanup_days(claude_dir: &Path) -> u64 {
+    std::fs::read_to_string(claude_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|settings| settings.get("cleanupPeriodDays")?.as_u64())
+        .unwrap_or(DEFAULT_CLEANUP_DAYS)
 }

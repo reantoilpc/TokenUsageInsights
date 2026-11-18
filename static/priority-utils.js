@@ -37,6 +37,6 @@ export function orderCards(sessions, pins, priorities) {
   return orderByPins(byStatus, pins);
 }
 
-export function prunePriorities(priorities, live, recent) {
-  return Object.fromEntries(Object.entries(priorities).filter(([key]) => isStillListed(key, live, recent)));
+export function prunePriorities(priorities, live, recent, favorites) {
+  return Object.fromEntries(Object.entries(priorities).filter(([key]) => isStillListed(key, live, recent, favorites)));
 }
