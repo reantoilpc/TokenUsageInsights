@@ -22,6 +22,6 @@ export function orderByPins(sessions, pins) {
   return [...pinned, ...rest];
 }
 
-export function prunePins(pins, live, recent) {
-  return pins.filter((pin) => isStillListed(pin, live, recent));
+export function prunePins(pins, live, recent, favorites) {
+  return pins.filter((pin) => isStillListed(pin, live, recent, favorites));
 }

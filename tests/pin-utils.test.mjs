@@ -41,6 +41,11 @@ test('a pin is kept while the session is running or recently ended, and dropped 
   assert.deepEqual(prunePins(pins, live, recent), ['codex:ended', 'claude:running']);
 });
 
+test('a pin is kept while its session is only in the favorites, so resuming it brings the pin back', () => {
+  const favorites = [session('claude', 'saved')];
+  assert.deepEqual(prunePins(['claude:saved', 'claude:gone'], [session('codex', 'x')], [], favorites), ['claude:saved']);
+});
+
 test('an answer with no sessions at all keeps every pin', () => {
   assert.deepEqual(prunePins(['claude:a', 'codex:b'], [], []), ['claude:a', 'codex:b']);
 });

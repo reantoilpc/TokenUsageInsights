@@ -1,5 +1,12 @@
 /* 「進行中」頁面：沿用看板的主題變數（深色／淺色），卡片依寬度自動多欄。 */
+.live-layout {
+  display: flex;
+  height: 100dvh;
+}
+
 .live-main {
+  flex: 1;
+  min-width: 0;
   position: relative;
   height: 100dvh;
   overflow-y: auto;
@@ -412,4 +419,161 @@
 
 .live-dialog-manual {
   margin-bottom: 12px;
+}
+
+/* 收藏：左側清單，寬螢幕與卡片並排；窄螢幕蓋在卡片上面 */
+.live-sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  height: 100dvh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: var(--space-5, 24px) 12px;
+  border-right: 1px solid var(--glass-border);
+  background: var(--bg-drawer);
+}
+
+.live-sidebar[hidden] {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .live-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    width: min(300px, 85vw);
+    box-shadow: var(--shadow-glass);
+  }
+}
+
+.live-sidebar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 4px 8px;
+}
+
+.live-sidebar-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+}
+
+.live-sidebar-collapse,
+.live-favorites-toggle {
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.live-sidebar-collapse {
+  padding: 0 8px;
+}
+
+.live-favorites-toggle {
+  padding: 2px 10px;
+  font-size: 0.85rem;
+  color: var(--neon-gold);
+}
+
+.live-sidebar-collapse:hover,
+.live-favorites-toggle:hover {
+  background: var(--card-bg-hover);
+}
+
+.live-favorites {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.live-favorites-empty {
+  padding: 8px 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.live-favorite-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.live-favorite-row:hover {
+  background: var(--card-bg-hover);
+}
+
+.live-favorite-row:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: -2px;
+}
+
+.live-favorite-unknown {
+  opacity: 0.6;
+}
+
+.live-favorite-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.live-favorite-head .live-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-favorite-badge {
+  flex: none;
+  color: var(--neon-green);
+  font-size: 0.75rem;
+}
+
+.live-favorite-meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-favorite-warning {
+  color: var(--neon-gold);
+  font-size: 0.8rem;
+}
+
+/* ★／☆ 是文字不是 emoji，可以直接換顏色 */
+.live-favorite {
+  flex: none;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.live-favorite[aria-pressed="true"] {
+  color: var(--neon-gold);
+}
+
+.live-favorite[aria-pressed="false"]:hover,
+.live-favorite[aria-pressed="false"]:focus-visible {
+  color: var(--neon-gold);
 }

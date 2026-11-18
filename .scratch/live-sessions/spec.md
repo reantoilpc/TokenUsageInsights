@@ -347,6 +347,7 @@ Token 戰情室目前只回答「過去花了多少 token」，沒有「現在�
 - 改名的名稱驗證是純前端邏輯：`static/rename-utils.js` 的 `renameCommand`，比照既有的前端工具以 `npm test` 測試。對話框、剪貼簿、跳轉與 ✎ 的停用規則以瀏覽器手動確認（攔下 POST，避免切換真正的分頁）。
 - 釘選的排序、切換與清理是純前端邏輯：`static/pin-utils.js`，比照 `rename-utils.js` 以 `npm test` 測試。📌 的外觀、點擊不觸發跳轉、重新整理後保留與 localStorage 失效時的行為以瀏覽器手動確認。
 - 優先度的排序（與釘選、狀態的先後）、設定與清理是純前端邏輯：`static/priority-utils.js`，以 `npm test` 測試。⚑ 選單的開關（Esc、再點一次、點外面、3 秒重畫後仍開著、鍵盤操作）、點擊不觸發跳轉、標籤外觀與 localStorage 失效時的行為以瀏覽器手動確認；外觀以假資料截圖。
+- 收藏：後端（依 id 查已結束的 session、四種狀態、從「最近結束」排除、接續不限 24 小時、`cleanupPeriodDays`）透過 HTTP 接縫測試；資料夾不存在以真的不存在的路徑、讀取出錯以壞掉的 Codex 資料庫模擬。收藏的切換、清理（只移除 gone）、清除前提醒與釘選、優先度在只剩收藏時的保留是純前端邏輯（`static/favorite-utils.js`），以 `npm test` 測試。左側清單、☆ 不觸發跳轉、點了接續或跳轉、收合記憶、窄螢幕與 localStorage 失效以瀏覽器與假資料確認（伺服器的 PATH 不含終端機，接續回「不支援」，不會開出真的分頁）。
 - 關閉：以名稱為 `claude`／`codex` 的 `sleep` 程序（`exec -a`，交給 init 收養，結束後不會留成 zombie）當作 agent，透過 HTTP 接縫測試：關分頁後程序結束、按了關閉鈕但程序沒結束時補送 SIGTERM、找不到或同名分頁時只送 SIGTERM、不理 SIGTERM 的程序回報還在而且不強制結束、暫停中的舊程序一起結束、工作中與 Codex 分不出程序時拒絕、程式名稱不對的 pid 不送訊號、來源不符時拒絕。假的 powershell.exe 第一次列出分頁、第二次按關閉鈕時對 agent 送 SIGHUP；假的 osascript 同樣送 SIGHUP。Ghostty 收到的 tty 以 `script` 開的虛擬終端機驗證（只在 Linux 跑）。兩段式確認與提示文字是純前端邏輯（`static/close-utils.js`），以 `npm test` 測試。真正的 Windows Terminal 以另開 port 的看板、在新分頁開 `claude -n` 手動驗證。
 - 卡片內容：壓縮摘要不算指令、圖片佔位字、context 大小（Claude Code 與 Codex）與剛壓縮的標示、重複程序合併、暫停中而分頁已換人用的程序（以 `script` 開的虛擬終端機放兩個 agent，只在 Linux 跑；含暫停的 Claude Code 後面接 Codex，以及這種 session 不給關），都透過 HTTP 接縫測試；context 的顯示格式是純前端邏輯（`static/context-utils.js`），以 `npm test` 測試。閒置字樣、副標與窄螢幕以假資料截圖確認（PR 是公開的，真實資料的畫面會露出工作上的 session 名稱）。
 

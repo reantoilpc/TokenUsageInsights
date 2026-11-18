@@ -59,6 +59,12 @@ test('a priority is kept while the session is running or recently ended, and dro
   assert.deepEqual(prunePriorities(priorities, live, recent), { 'codex:ended': 'low', 'claude:running': 'high' });
 });
 
+test('a priority is kept while its session is only in the favorites, so it is still there when resumed days later', () => {
+  const favorites = [session('claude', 'saved')];
+  const priorities = { 'claude:saved': 'high', 'claude:gone': 'low' };
+  assert.deepEqual(prunePriorities(priorities, [session('codex', 'x')], [], favorites), { 'claude:saved': 'high' });
+});
+
 test('an answer with no sessions at all keeps every priority', () => {
   assert.deepEqual(prunePriorities({ 'claude:a': 'high' }, [], []), { 'claude:a': 'high' });
 });
