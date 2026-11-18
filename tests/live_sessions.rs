@@ -3069,3 +3069,246 @@ async fn codex_cannot_be_closed_when_one_folder_has_several_processes_without_id
     assert!(body["message"].as_str().unwrap().contains("分不出"));
     assert!(running(first) && running(second));
 }
+
+// ---- 收藏 ----
+
+const U3: &str = "9c4d2e1f-8a7b-4c6d-9e5f-1a2b3c4d5e6f";
+const DAY: u64 = 24 * HOUR;
+
+impl LiveServer {
+    /// 帶著收藏呼叫 `GET /api/live?favorites=...`。
+    async fn live_with_favorites(&self, favorites: &str) -> Value {
+        let (status, body) = self
+            .get_raw(&format!("/api/live?favorites={favorites}"), &[])
+            .await;
+        assert_eq!(status, 200, "{body}");
+        serde_json::from_str(&body).unwrap()
+    }
+
+    /// 一個真的存在的工作資料夾：收藏會檢查資料夾還在不在。
+    fn existing_folder(&self, name: &str) -> String {
+        let dir = self.root.join("work").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        dir.to_str().unwrap().to_string()
+    }
+}
+
+fn favorite<'a>(live: &'a Value, id: &str) -> &'a Value {
+    live["favorites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap_or_else(|| panic!("收藏清單裡沒有 {id}：{live}"))
+}
+
+#[tokio::test]
+async fn favorites_older_than_a_day_are_still_listed_with_their_details() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    let erp = server.existing_folder("erp");
+    server.aged_transcript(
+        "-work-erp",
+        U1,
+        &finished_conversation(U1, &erp, "修好登入頁", Some("登入頁修正")),
+        3 * DAY,
+    );
+    let mango = server.existing_folder("mango");
+    server.codex_thread(
+        T1,
+        &mango,
+        Some("比較模式"),
+        now_ms() - (5 * DAY * 1000) as i64,
+        "user",
+        "done",
+    );
+
+    let live = server
+        .live_with_favorites(&format!("claude:{U1},codex:{T1}"))
+        .await;
+
+    let claude = favorite(&live, U1);
+    assert_eq!(claude["agent"], "claude");
+    assert_eq!(claude["state"], "ended");
+    assert_eq!(claude["name"], "登入頁修正");
+    assert_eq!(claude["folder"], "erp");
+    assert_eq!(claude["lastPrompt"], "修好登入頁");
+    assert!(claude["updatedAt"].as_u64().unwrap() < (now_ms() as u64) - 2 * DAY * 1000);
+    let codex = favorite(&live, T1);
+    assert_eq!(codex["agent"], "codex");
+    assert_eq!(codex["state"], "ended");
+    assert_eq!(codex["name"], "比較模式");
+    assert_eq!(codex["folder"], "mango");
+    // 請求的順序就是回傳的順序，前端自己依收藏先後排
+    let ids: Vec<&str> = card_ids(&live, "favorites");
+    assert_eq!(ids, vec![U1, T1]);
+}
+
+#[tokio::test]
+async fn an_open_favorite_is_marked_open_with_its_card_details() {
+    let mut server = LiveServer::start(Some("127.0.0.1")).await;
+    let pid = server.alive_pid();
+    let mut session = registered(U1, "/work/erp", "idle", 1000);
+    session["name"] = json!("登入頁修正");
+    server.claude_session(pid, session);
+
+    let live = server.live_with_favorites(&format!("claude:{U1}")).await;
+
+    let item = favorite(&live, U1);
+    assert_eq!(item["state"], "open");
+    assert_eq!(item["name"], "登入頁修正");
+    assert_eq!(item["folder"], "erp");
+}
+
+#[tokio::test]
+async fn a_favorite_that_can_no_longer_be_resumed_says_why() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    // 對話紀錄還在，但工作資料夾已經刪掉
+    server.aged_transcript(
+        "-work-gone",
+        U1,
+        &finished_conversation(U1, "/work/gone-for-good", "指令", None),
+        3 * DAY,
+    );
+    // Codex：資料庫有這段對話，但紀錄檔不見了
+    let erp = server.existing_folder("erp");
+    server.codex_thread(T1, &erp, None, now_ms(), "user", "done");
+    fs::remove_file(
+        server
+            .root
+            .join(format!("codex/sessions/rollout-{T1}.jsonl")),
+    )
+    .unwrap();
+
+    let live = server
+        .live_with_favorites(&format!("claude:{U1},claude:{U2},codex:{T1},codex:{T2}"))
+        .await;
+
+    for (id, reason) in [
+        (U1, "資料夾不存在"),
+        (U2, "對話紀錄不存在"),
+        (T1, "對話紀錄不存在"),
+        (T2, "對話紀錄不存在"),
+    ] {
+        let item = favorite(&live, id);
+        assert_eq!(item["state"], "gone", "{id}");
+        assert_eq!(item["reason"], reason, "{id}");
+    }
+}
+
+#[tokio::test]
+async fn a_favorite_that_cannot_be_read_right_now_is_unknown_not_gone() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    // 資料庫壞掉是暫時讀不到，不代表對話不存在；前端不能因此移除收藏
+    let dir = server.root.join("codex");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("state_5.sqlite"), "這不是 SQLite").unwrap();
+
+    let live = server.live_with_favorites(&format!("codex:{T1}")).await;
+
+    let item = favorite(&live, T1);
+    assert_eq!(item["state"], "unknown");
+    assert!(item.get("reason").is_none_or(Value::is_null));
+}
+
+#[tokio::test]
+async fn favorites_are_left_out_of_recent_and_do_not_take_its_ten_slots() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    let ids: Vec<String> = (0..11u64)
+        .map(|n| format!("00000000-0000-4000-8000-{n:012}"))
+        .collect();
+    for (n, id) in ids.iter().enumerate() {
+        server.aged_transcript(
+            "-work-erp",
+            id,
+            &finished_conversation(id, "/work/erp", "指令", None),
+            (n as u64 + 1) * 600,
+        );
+    }
+
+    let live = server
+        .live_with_favorites(&format!("claude:{}", ids[0]))
+        .await;
+
+    let expected: Vec<&str> = ids[1..].iter().map(String::as_str).collect();
+    assert_eq!(recent_ids(&live), expected);
+    assert_eq!(card_ids(&live, "favorites"), vec![ids[0].as_str()]);
+}
+
+#[tokio::test]
+async fn malformed_favorites_are_skipped_without_failing_the_request() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    let erp = server.existing_folder("erp");
+    server.aged_transcript(
+        "-work-erp",
+        U1,
+        &finished_conversation(U1, &erp, "指令", None),
+        HOUR,
+    );
+    let mut many: Vec<String> = vec![
+        format!("claude:{U1}"),
+        format!("claude:{U1}"),
+        "claude:not-a-uuid".into(),
+        format!("vim:{U2}"),
+        "no-colon".into(),
+        String::new(),
+    ];
+    many.extend((0..60u64).map(|n| format!("codex:00000000-0000-4000-8000-{n:012}")));
+
+    let live = server.live_with_favorites(&many.join(",")).await;
+
+    let ids = card_ids(&live, "favorites");
+    assert_eq!(ids[0], U1);
+    assert_eq!(ids.iter().filter(|id| **id == U1).count(), 1);
+    assert_eq!(ids.len(), 50, "最多收 50 筆");
+    // 不帶收藏時照舊，回傳空的收藏清單
+    assert_eq!(server.live().await["favorites"], json!([]));
+}
+
+#[tokio::test]
+async fn a_favorite_ended_days_ago_can_still_be_resumed() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    server.aged_transcript(
+        "-work-erp",
+        U3,
+        &finished_conversation(U3, "/work/erp", "修好登入頁", None),
+        10 * DAY,
+    );
+    server.codex_thread(
+        T2,
+        "/work/mango",
+        None,
+        now_ms() - (10 * DAY * 1000) as i64,
+        "user",
+        "done",
+    );
+    server.fake.script("osascript", "ok\n");
+
+    let (claude, _) = server
+        .post_json(RESUME, json!({"agent":"claude","id":U3}))
+        .await;
+    let (codex, _) = server
+        .post_json(RESUME, json!({"agent":"codex","id":T2}))
+        .await;
+
+    assert_eq!((claude, codex), (200, 200));
+    let calls = server.fake.calls("osascript");
+    assert_eq!(calls[0][2], "/work/erp");
+    assert_eq!(calls[0][3].trim_end(), format!("claude --resume {U3}"));
+    assert_eq!(calls[1][2], "/work/mango");
+    assert_eq!(calls[1][3].trim_end(), format!("codex resume {T2}"));
+}
+
+#[tokio::test]
+async fn the_claude_cleanup_period_comes_from_its_settings_or_defaults_to_thirty_days() {
+    let server = LiveServer::start(Some("127.0.0.1")).await;
+    assert_eq!(server.live().await["claudeCleanupDays"], 30);
+
+    fs::create_dir_all(server.root.join("claude")).unwrap();
+    fs::write(
+        server.root.join("claude/settings.json"),
+        r#"{"cleanupPeriodDays": 14, "theme": "dark"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(server.live().await["claudeCleanupDays"], 14);
+}

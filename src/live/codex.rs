@@ -4,9 +4,9 @@
 use super::{
     ghostty,
     transcript::{self, timestamp_ms, Context, Progress, Prompt, Scanner, Transcript},
-    EndedSession, LiveSession,
+    EndedSession, LiveSession, Lookup, TRANSCRIPT_GONE,
 };
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, ToSql};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -361,17 +361,26 @@ fn threads(codex_dir: &Path, since_ms: u64) -> Vec<Thread> {
     let Some(conn) = state_db(codex_dir).and_then(|path| open_read_only(&path)) else {
         return Vec::new();
     };
+    query_threads(
+        &conn,
+        "archived = 0 AND (thread_source IS NULL OR thread_source = 'user') AND updated_at_ms >= ?1",
+        &since_ms,
+    )
+    .unwrap_or_default()
+}
+
+/// 讀不了資料表（資料庫壞掉、不是 SQLite）時回傳 None，與「查無資料」分開。
+fn query_threads(conn: &Connection, condition: &str, param: &dyn ToSql) -> Option<Vec<Thread>> {
     // 舊版資料庫沒有 originator 欄位：改用固定值，不讓進行中的卡片整個消失
     for originator in ["originator", "'codex-tui'"] {
         let sql = format!(
             "SELECT id, rollout_path, cwd, name, updated_at_ms, {originator} FROM threads \
-             WHERE archived = 0 AND (thread_source IS NULL OR thread_source = 'user') \
-             AND updated_at_ms >= ?1 ORDER BY updated_at_ms DESC"
+             WHERE {condition} ORDER BY updated_at_ms DESC"
         );
         let Ok(mut statement) = conn.prepare(&sql) else {
             continue;
         };
-        let rows = statement.query_map([since_ms], |row| {
+        let rows = statement.query_map([param], |row| {
             Ok(Thread {
                 id: row.get(0)?,
                 rollout_path: PathBuf::from(row.get::<_, Option<String>>(1)?.unwrap_or_default()),
@@ -383,11 +392,9 @@ fn threads(codex_dir: &Path, since_ms: u64) -> Vec<Thread> {
                 originator: row.get(5)?,
             })
         });
-        return rows
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default();
+        return rows.map(|rows| rows.flatten().collect()).ok();
     }
-    Vec::new()
+    None
 }
 
 /// 版本號最大的 `state_<n>.sqlite`。
@@ -433,19 +440,42 @@ pub fn recent(codex_dir: &Path, open: &HashSet<String>, since_ms: u64) -> Vec<En
     threads(codex_dir, since_ms)
         .into_iter()
         .filter(|thread| thread.is_terminal() && !open.contains(&thread.id))
-        .map(|thread| {
-            let (last_prompt, prompt_at) =
-                Prompt::split(transcript::read(&thread.rollout_path, &CODEX).last_prompt);
-            EndedSession {
-                folder: super::folder_of(&thread.cwd),
-                cwd: thread.cwd,
-                agent: "codex",
-                id: thread.id,
-                name: thread.name,
-                last_prompt,
-                prompt_at,
-                updated_at: thread.updated_at,
-            }
-        })
+        .map(ended_session)
         .collect()
+}
+
+/// 不限時間，依 id 找已結束的終端機版對話（收藏用）。
+pub fn ended(codex_dir: &Path, id: &str) -> Lookup {
+    let Some(conn) = state_db(codex_dir).and_then(|path| open_read_only(&path)) else {
+        return Lookup::Unknown;
+    };
+    let Some(threads) = query_threads(&conn, "id = ?1", &id) else {
+        return Lookup::Unknown;
+    };
+    let Some(thread) = threads.into_iter().next() else {
+        return Lookup::Gone(TRANSCRIPT_GONE);
+    };
+    if !thread.is_terminal() {
+        return Lookup::Unknown;
+    }
+    match std::fs::metadata(&thread.rollout_path) {
+        Ok(_) => Lookup::Found(ended_session(thread)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Lookup::Gone(TRANSCRIPT_GONE),
+        Err(_) => Lookup::Unknown,
+    }
+}
+
+fn ended_session(thread: Thread) -> EndedSession {
+    let (last_prompt, prompt_at) =
+        Prompt::split(transcript::read(&thread.rollout_path, &CODEX).last_prompt);
+    EndedSession {
+        folder: super::folder_of(&thread.cwd),
+        cwd: thread.cwd,
+        agent: "codex",
+        id: thread.id,
+        name: thread.name,
+        last_prompt,
+        prompt_at,
+        updated_at: thread.updated_at,
+    }
 }

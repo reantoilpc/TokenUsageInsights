@@ -11,6 +11,7 @@ mod transcript;
 mod windows_terminal;
 
 use axum::{
+    extract::Query,
     http::{
         header::{HOST, ORIGIN},
         HeaderMap, StatusCode,
@@ -70,7 +71,7 @@ struct EndedSession {
 }
 
 impl EndedSession {
-    /// 接續用的固定指令；id 已經過 UUID 格式檢查，而且是清單上已知的 session。
+    /// 接續用的固定指令；id 已經過 UUID 格式檢查，而且伺服器依 id 找得到它的紀錄。
     fn resume_command(&self) -> String {
         match self.agent {
             "codex" => format!("codex resume {}", self.id),
@@ -81,20 +82,150 @@ impl EndedSession {
 
 const RECENT_WINDOW_MS: u64 = 24 * 3600 * 1000;
 const RECENT_LIMIT: usize = 10;
+/// 收藏只存在瀏覽器，id 由前端帶來；設上限免得每 3 秒的輪詢讀太多紀錄檔。
+const FAVORITES_LIMIT: usize = 50;
+const TRANSCRIPT_GONE: &str = "對話紀錄不存在";
+const FOLDER_GONE: &str = "資料夾不存在";
 
-pub async fn get_live(headers: HeaderMap) -> Response {
+/// 依 id 找已結束的 session 的結果。`Gone` 是確定接續不了，前端會因此移除收藏；
+/// 讀取出錯只能算 `Unknown`，否則一次暫時的錯誤就會把收藏清掉。
+enum Lookup {
+    Found(EndedSession),
+    Gone(&'static str),
+    Unknown,
+}
+
+/// 收藏的 session 現況。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Favorite {
+    agent: &'static str,
+    id: String,
+    /// open：還開著；ended：可以接續；gone：確定接續不了（原因見 reason）；unknown：暫時讀不到。
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+    name: Option<String>,
+    folder: Option<String>,
+    last_prompt: Option<String>,
+    prompt_at: Option<u64>,
+    updated_at: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct LiveQuery {
+    /// 以逗號分隔的 `agent:id`，例如 `claude:<uuid>,codex:<uuid>`。
+    favorites: Option<String>,
+}
+
+pub async fn get_live(headers: HeaderMap, Query(query): Query<LiveQuery>) -> Response {
     // 內容含我打過的指令與資料夾：不接受別的網域（DNS rebinding）把請求導到本機來讀
     if !loopback_host(&headers) {
         return failure(StatusCode::FORBIDDEN, "只接受以本機位址連線");
     }
-    let (live, recent) = tokio::task::spawn_blocking(|| {
+    let wanted = parse_favorites(query.favorites.as_deref().unwrap_or(""));
+    let (live, recent, favorites, cleanup_days) = tokio::task::spawn_blocking(move || {
         let live = live_sessions();
-        let recent = recent_sessions(&live);
-        (live, recent)
+        let recent = recent_sessions(&live, &wanted);
+        let favorites = favorites(&live, wanted);
+        let cleanup_days = claude::cleanup_days(&crate::db::get_claude_dir());
+        (live, recent, favorites, cleanup_days)
     })
     .await
-    .unwrap_or_default();
-    Json(json!({ "live": live, "recent": recent })).into_response()
+    .unwrap_or_else(|_| {
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            claude::DEFAULT_CLEANUP_DAYS,
+        )
+    });
+    Json(json!({
+        "live": live,
+        "recent": recent,
+        "favorites": favorites,
+        "claudeCleanupDays": cleanup_days,
+    }))
+    .into_response()
+}
+
+/// 不合格的（agent 不認得、id 不是 UUID、重複）略過，不讓整個請求失敗。
+fn parse_favorites(text: &str) -> Vec<(&'static str, String)> {
+    let mut seen = HashSet::new();
+    text.split(',')
+        .filter_map(|item| {
+            let (agent, id) = item.split_once(':')?;
+            let agent = match agent {
+                "claude" => "claude",
+                "codex" => "codex",
+                _ => return None,
+            };
+            codex::is_uuid(id).then(|| (agent, id.to_string()))
+        })
+        .filter(|favorite| seen.insert(favorite.clone()))
+        .take(FAVORITES_LIMIT)
+        .collect()
+}
+
+fn favorites(live: &[LiveSession], wanted: Vec<(&'static str, String)>) -> Vec<Favorite> {
+    wanted
+        .into_iter()
+        .map(|(agent, id)| {
+            if let Some(open) = live
+                .iter()
+                .find(|session| session.agent == agent && session.id == id)
+            {
+                return Favorite {
+                    agent,
+                    id,
+                    state: "open",
+                    reason: None,
+                    name: open.name.clone(),
+                    folder: Some(open.folder.clone()),
+                    last_prompt: open.last_prompt.clone(),
+                    prompt_at: open.prompt_at,
+                    updated_at: Some(open.updated_at),
+                };
+            }
+            let (state, reason, ended) = match with_existing_folder(find_ended(agent, &id)) {
+                Lookup::Found(ended) => ("ended", None, Some(ended)),
+                Lookup::Gone(reason) => ("gone", Some(reason), None),
+                Lookup::Unknown => ("unknown", None, None),
+            };
+            Favorite {
+                agent,
+                id,
+                state,
+                reason,
+                name: ended.as_ref().and_then(|ended| ended.name.clone()),
+                folder: ended.as_ref().map(|ended| ended.folder.clone()),
+                last_prompt: ended.as_ref().and_then(|ended| ended.last_prompt.clone()),
+                prompt_at: ended.as_ref().and_then(|ended| ended.prompt_at),
+                updated_at: ended.as_ref().map(|ended| ended.updated_at),
+            }
+        })
+        .collect()
+}
+
+/// 不限時間，依 id 找已結束的 session。
+fn find_ended(agent: &str, id: &str) -> Lookup {
+    match agent {
+        "claude" => claude::ended(&crate::db::get_claude_dir(), id),
+        "codex" => codex::ended(&crate::db::get_codex_dir(), id),
+        _ => Lookup::Gone(TRANSCRIPT_GONE),
+    }
+}
+
+/// 工作資料夾被刪掉的 session 接續了也打不開，算確定接續不了。
+fn with_existing_folder(lookup: Lookup) -> Lookup {
+    let Lookup::Found(ended) = lookup else {
+        return lookup;
+    };
+    match std::fs::metadata(&ended.cwd) {
+        Ok(_) => Lookup::Found(ended),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Lookup::Gone(FOLDER_GONE),
+        Err(_) => Lookup::Unknown,
+    }
 }
 
 /// Claude Code 與 Codex 的 session 合在一起排序。
@@ -275,8 +406,13 @@ pub async fn post_close(headers: HeaderMap, Json(request): Json<SessionRef>) -> 
 }
 
 /// 24 小時內結束、目前沒開著的 session，Claude Code 與 Codex 合在一起，最近的在前，最多 10 筆。
-fn recent_sessions(live: &[LiveSession]) -> Vec<EndedSession> {
-    let open: HashSet<String> = live.iter().map(|session| session.id.clone()).collect();
+/// 收藏的 session 只列在收藏，不佔這 10 筆。
+fn recent_sessions(live: &[LiveSession], favorites: &[(&str, String)]) -> Vec<EndedSession> {
+    let skip: HashSet<String> = live
+        .iter()
+        .map(|session| session.id.clone())
+        .chain(favorites.iter().map(|(_, id)| id.clone()))
+        .collect();
     // 重開同一段對話會換 session id，舊的紀錄還在：標題與資料夾都相同就當作同一段，不重複列出
     let open_titles: HashSet<(&str, &str)> = live
         .iter()
@@ -286,21 +422,22 @@ fn recent_sessions(live: &[LiveSession]) -> Vec<EndedSession> {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as u64);
     let since = now.saturating_sub(RECENT_WINDOW_MS);
-    let mut recent = claude::recent(&crate::db::get_claude_dir(), &open, since);
+    let mut recent = claude::recent(&crate::db::get_claude_dir(), &skip, since);
     recent.retain(|item| {
         !item
             .name
             .as_deref()
             .is_some_and(|name| open_titles.contains(&(item.cwd.as_str(), name)))
     });
-    recent.extend(codex::recent(&crate::db::get_codex_dir(), &open, since));
+    recent.extend(codex::recent(&crate::db::get_codex_dir(), &skip, since));
     recent.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
     recent.truncate(RECENT_LIMIT);
     recent
 }
 
 /// 為已結束的 session 開新分頁接續。只能執行固定的 `claude --resume <id>` 或
-/// `codex resume <id>`；id 必須是看板「最近結束」清單上的 session，資料夾由伺服器自己查。
+/// `codex resume <id>`；資料夾由伺服器依 id 自己查。不限「最近結束」的 24 小時：收藏的
+/// session 隔幾天也要接得回來，所以這台電腦上還留著紀錄的 session 都可以接續。
 pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) -> Response {
     if !from_dashboard(&headers) {
         return failure(StatusCode::FORBIDDEN, "請求來源不符");
@@ -313,10 +450,9 @@ pub async fn post_resume(headers: HeaderMap, Json(request): Json<SessionRef>) ->
         if live.iter().any(|session| session.id == request.id) {
             return Err((StatusCode::CONFLICT, "這個 session 還開著，請直接跳過去"));
         }
-        let ended = recent_sessions(&live)
-            .into_iter()
-            .find(|item| item.agent == request.agent && item.id == request.id)
-            .ok_or((StatusCode::NOT_FOUND, "找不到這個已結束的 session"))?;
+        let Lookup::Found(ended) = find_ended(&request.agent, &request.id) else {
+            return Err((StatusCode::NOT_FOUND, "找不到這個已結束的 session"));
+        };
         Ok(terminal::open_tab(&ended.cwd, &ended.resume_command()))
     })
     .await;

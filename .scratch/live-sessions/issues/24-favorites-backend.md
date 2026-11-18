@@ -45,9 +45,9 @@
 
 ## 驗收
 
-- [ ] `GET /api/live?favorites=...` 回傳 `favorites`：還開著、已結束、對話紀錄不存在、資料夾不存在、讀取出錯各一種情況（HTTP 測試）
-- [ ] 收藏超過 24 小時的 Claude Code 與 Codex session 都查得到（HTTP 測試）
-- [ ] 收藏不出現在「最近結束」，也不佔 10 筆名額（HTTP 測試）
-- [ ] 不合格的 id、超過上限的收藏被略過，不會讓整個請求失敗（HTTP 測試）
-- [ ] `POST /api/live/resume` 可以接續超過 24 小時的 session；格式錯誤、找不到、還開著的照舊拒絕；來源不符照舊拒絕（HTTP 測試）
-- [ ] 通過提交前檢查（同 01）
+- [x] `GET /api/live?favorites=...` 回傳 `favorites`：還開著、已結束、對話紀錄不存在、資料夾不存在、讀取出錯各一種情況（HTTP 測試）
+- [x] 收藏超過 24 小時的 Claude Code 與 Codex session 都查得到（HTTP 測試）
+- [x] 收藏不出現在「最近結束」，也不佔 10 筆名額（HTTP 測試）
+- [x] 不合格的 id、超過上限的收藏被略過，不會讓整個請求失敗（HTTP 測試）
+- [x] `POST /api/live/resume` 可以接續超過 24 小時的 session；格式錯誤、找不到、還開著的照舊拒絕；來源不符照舊拒絕（HTTP 測試）
+- [x] 通過提交前檢查（同 01）
