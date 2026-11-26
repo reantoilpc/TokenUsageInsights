@@ -20,7 +20,7 @@
     document.documentElement.setAttribute('data-theme', savedTheme);
   </script>
   <!-- CSS Stylesheet -->
-  <link rel="stylesheet" href="/static/styles.css?v=37">
+  <link rel="stylesheet" href="/static/styles.css?v=41">
   <!-- Chart.js for beautiful charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Marked.js for rendering markdown response -->
@@ -59,9 +59,9 @@
             </span>
             <span class="assistant-all-label" data-i18n="all_agents_label">全部 Agent</span>
           </button>
-          <button class="assistant-badge-btn active" data-value="antigravity" title="Antigravity CLI" aria-label="Antigravity CLI">
+          <button class="assistant-badge-btn active" data-value="antigravity" title="Antigravity" aria-label="Antigravity">
             <img class="assistant-logo" src="/static/antigravity.webp" alt="Antigravity" />
-            <span class="agent-name-tooltip">Antigravity CLI</span>
+            <span class="agent-name-tooltip">Antigravity</span>
           </button>
           <button class="assistant-badge-btn" data-value="copilot" title="GitHub Copilot" aria-label="GitHub Copilot">
             <img class="assistant-logo" src="/static/githubcopilot.webp" alt="Copilot" />
@@ -102,14 +102,11 @@
         </div>
       </div>
 
-      <!-- Navigation Tabs (Hidden, logic runs in background) -->
-      <div class="sidebar-section" style="display: none !important;">
-        <div class="tabs-nav">
-          <button class="nav-tab active" id="tab-btn-daily" data-i18n="tab_daily">每日</button>
-          <button class="nav-tab" id="tab-btn-monthly" data-i18n="tab_monthly">月度</button>
-          <button class="nav-tab" id="tab-btn-yearly" data-i18n="tab_yearly">年度</button>
-          <button class="nav-tab" id="tab-btn-range" data-i18n="tab_range">區間</button>
-        </div>
+      <div class="period-switcher" id="period-switcher" role="group" aria-label="統計期間" data-i18n-aria-label="period_switcher_label">
+        <button type="button" id="tab-btn-daily" data-period="daily" aria-pressed="true" data-i18n="tab_daily">每日</button>
+        <button type="button" id="tab-btn-monthly" data-period="monthly" aria-pressed="false" data-i18n="tab_monthly">月度</button>
+        <button type="button" id="tab-btn-yearly" data-period="yearly" aria-pressed="false" data-i18n="tab_yearly">年度</button>
+        <button type="button" id="tab-btn-range" data-period="range" aria-pressed="false" data-i18n="tab_range">區間</button>
       </div>
 
       <!-- Section 1: Daily Selector (for daily tab) -->
@@ -117,18 +114,6 @@
         <h3 data-i18n="select_date">選擇日期</h3>
         <div class="date-selector-wrapper" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
           <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
-            <div class="hover-dropdown tab-hover-dropdown range-tab-dropdown">
-              <div class="hover-dropdown-trigger" style="height: 100%; display: flex; align-items: center; justify-content: space-between; border-radius: 12px; padding: 12px 10px; background: var(--bg-select); border: 1px solid var(--glass-border); color: var(--text-primary); font-family: var(--font-body); font-weight: 500;">
-                <span class="tab-dropdown-label" data-i18n="tab_daily">每日</span>
-                <span class="dropdown-caret"><span class="icon-glyph icon-chevron-down" aria-hidden="true"></span></span>
-              </div>
-              <div class="hover-dropdown-options">
-                <div class="hover-dropdown-option" data-value="daily" data-i18n="tab_daily">每日</div>
-                <div class="hover-dropdown-option" data-value="monthly" data-i18n="tab_monthly">月度</div>
-                <div class="hover-dropdown-option" data-value="yearly" data-i18n="tab_yearly">年度</div>
-                <div class="hover-dropdown-option" data-value="range" data-i18n="tab_range">區間</div>
-              </div>
-            </div>
             <input type="date" id="date-select" class="premium-date-input" style="margin: 0; box-sizing: border-box; width: 100%;">
           </div>
           <div style="display: flex; gap: 8px; width: 100%;">
@@ -177,18 +162,6 @@
         <h3 data-i18n="select_month">選擇月份</h3>
         <div class="date-selector-wrapper" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
           <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
-            <div class="hover-dropdown tab-hover-dropdown range-tab-dropdown">
-              <div class="hover-dropdown-trigger" style="height: 100%; display: flex; align-items: center; justify-content: space-between; border-radius: 12px; padding: 12px 10px; background: var(--bg-select); border: 1px solid var(--glass-border); color: var(--text-primary); font-family: var(--font-body); font-weight: 500;">
-                <span class="tab-dropdown-label" data-i18n="tab_monthly">月度</span>
-                <span class="dropdown-caret"><span class="icon-glyph icon-chevron-down" aria-hidden="true"></span></span>
-              </div>
-              <div class="hover-dropdown-options">
-                <div class="hover-dropdown-option" data-value="daily" data-i18n="tab_daily">每日</div>
-                <div class="hover-dropdown-option" data-value="monthly" data-i18n="tab_monthly">月度</div>
-                <div class="hover-dropdown-option" data-value="yearly" data-i18n="tab_yearly">年度</div>
-                <div class="hover-dropdown-option" data-value="range" data-i18n="tab_range">區間</div>
-              </div>
-            </div>
             <select id="month-select" class="premium-select" style="margin: 0; box-sizing: border-box; width: 100%;">
               <option value="" disabled selected data-i18n="loading">載入中...</option>
             </select>
@@ -209,18 +182,6 @@
         <h3 data-i18n="select_year">選擇年份</h3>
         <div class="date-selector-wrapper" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
           <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
-            <div class="hover-dropdown tab-hover-dropdown range-tab-dropdown">
-              <div class="hover-dropdown-trigger" style="height: 100%; display: flex; align-items: center; justify-content: space-between; border-radius: 12px; padding: 12px 10px; background: var(--bg-select); border: 1px solid var(--glass-border); color: var(--text-primary); font-family: var(--font-body); font-weight: 500;">
-                <span class="tab-dropdown-label" data-i18n="tab_yearly">年度</span>
-                <span class="dropdown-caret"><span class="icon-glyph icon-chevron-down" aria-hidden="true"></span></span>
-              </div>
-              <div class="hover-dropdown-options">
-                <div class="hover-dropdown-option" data-value="daily" data-i18n="tab_daily">每日</div>
-                <div class="hover-dropdown-option" data-value="monthly" data-i18n="tab_monthly">月度</div>
-                <div class="hover-dropdown-option" data-value="yearly" data-i18n="tab_yearly">年度</div>
-                <div class="hover-dropdown-option" data-value="range" data-i18n="tab_range">區間</div>
-              </div>
-            </div>
             <select id="year-select" class="premium-select" style="margin: 0; box-sizing: border-box; width: 100%;">
               <option value="" disabled selected data-i18n="loading">載入中...</option>
             </select>
@@ -240,18 +201,6 @@
       <div class="sidebar-section hidden" id="range-selector-section">
         <h3 data-i18n="select_range">選擇週／自訂區間</h3>
         <div class="date-selector-wrapper" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-          <div class="hover-dropdown tab-hover-dropdown range-tab-dropdown">
-            <div class="hover-dropdown-trigger" style="display: flex; align-items: center; justify-content: space-between; border-radius: 12px; padding: 12px 10px; background: var(--bg-select); border: 1px solid var(--glass-border); color: var(--text-primary); font-family: var(--font-body); font-weight: 500;">
-              <span class="tab-dropdown-label" data-i18n="tab_range">區間</span>
-              <span class="dropdown-caret"><span class="icon-glyph icon-chevron-down" aria-hidden="true"></span></span>
-            </div>
-            <div class="hover-dropdown-options">
-              <div class="hover-dropdown-option" data-value="daily" data-i18n="tab_daily">每日</div>
-              <div class="hover-dropdown-option" data-value="monthly" data-i18n="tab_monthly">月度</div>
-              <div class="hover-dropdown-option" data-value="yearly" data-i18n="tab_yearly">年度</div>
-              <div class="hover-dropdown-option" data-value="range" data-i18n="tab_range">區間</div>
-            </div>
-          </div>
           <div class="range-date-field">
             <label for="range-start" class="range-field-label" data-i18n="range_start_label">開始日期</label>
             <input type="date" id="range-start" class="premium-date-input" style="margin: 0; box-sizing: border-box; width: 100%;">
@@ -399,51 +348,23 @@
           </div>
         </div>
         <div class="header-controls" style="display: flex; align-items: center; gap: 10px;">
-          <button id="btn-export-usage-day" class="icon-btn has-tooltip" data-i18n-title="btn_export_day_title" title="匯出目前報表範圍的資料" aria-label="匯出目前報表範圍的資料">
+          <button
+            id="btn-global-search"
+            class="icon-btn has-tooltip"
+            type="button"
+            data-i18n-title="global_search_btn_title"
+            title="全域搜尋對話內容（⌘K / Ctrl+K）"
+            aria-label="全域搜尋對話內容（⌘K / Ctrl+K）"
+          >
             <span class="control-svg-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M12 3v11" />
-                <path d="M8 10l4 4 4-4" />
-                <path d="M4 20h16" />
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-4.2-4.2" />
               </svg>
             </span>
-            <span class="sr-only" data-i18n="btn_export_day">匯出</span>
+            <span class="sr-only" data-i18n="global_search_title">全域搜尋</span>
           </button>
-          <button id="btn-import-usage-day" class="icon-btn has-tooltip" data-i18n-title="btn_import_day_title" title="匯入檔案中的所有資料" aria-label="匯入檔案中的所有資料">
-            <span class="control-svg-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M12 21V10" />
-                <path d="M8 14l4-4 4 4" />
-                <path d="M4 4h16" />
-              </svg>
-            </span>
-            <span class="sr-only" data-i18n="btn_import_day">匯入</span>
-          </button>
-          <input id="usage-day-import-input" type="file" accept="application/json,.json" style="display: none;" />
-          <button id="btn-import-history" class="icon-btn has-tooltip" data-i18n-title="btn_import_history_title" title="匯入紀錄與撤銷" aria-label="匯入紀錄與撤銷">
-            <span class="control-svg-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M3 12a9 9 0 1 0 3-6.7" />
-                <path d="M3 4v6h6" />
-                <path d="M12 7v5l3 2" />
-              </svg>
-            </span>
-            <span class="sr-only" data-i18n="btn_import_history">匯入紀錄</span>
-          </button>
-          <label class="lang-select-label">
-            <span class="sr-only" data-i18n="btn_language">語言</span>
-            <select id="lang-select" class="lang-select" aria-label="語言" title="語言">
-              <option value="auto" data-i18n="language_auto">自動</option>
-              <option value="zh-TW">繁體中文</option>
-              <option value="zh-CN">简体中文</option>
-              <option value="en">English</option>
-              <option value="ja">日本語</option>
-              <option value="ko">한국어</option>
-            </select>
-          </label>
-          <button id="btn-pricing-sheet" class="icon-btn has-tooltip" data-i18n-title="btn_pricing_sheet" title="費用標準" aria-label="費用標準"><span class="icon-glyph icon-currency" aria-hidden="true"></span></button>
-          <button id="btn-setup-guide" class="icon-btn has-tooltip" data-i18n-title="setup_guide_title" title="前置作業啟用教學" aria-label="前置作業啟用教學"><span class="icon-glyph icon-help" aria-hidden="true"></span></button>
-          <button id="btn-sync-db" class="icon-btn has-tooltip" data-i18n-title="sync_db_title" title="立即手動同步日誌檔到 SQLite 資料庫" aria-label="立即手動同步日誌檔到 SQLite 資料庫"><span class="icon-glyph icon-sync" aria-hidden="true"></span></button>
+
           <a id="live-page-btn" class="icon-btn has-tooltip" href="/live.html" title="進行中的 session" aria-label="進行中的 session">
             <span class="control-svg-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -451,10 +372,120 @@
               </svg>
             </span>
           </a>
-          <button id="theme-toggle-btn" class="icon-btn has-tooltip" data-i18n-title="theme_toggle_title_dark" title="切換主題" aria-label="切換主題"><span class="icon-glyph icon-theme" aria-hidden="true"></span></button>
-          <a id="github-repo-btn" class="icon-btn has-tooltip" href="https://github.com/doggy8088/TokenUsageInsights" target="_blank" rel="noopener noreferrer" data-i18n-title="github_repo_title" title="GitHub Repo">
-            <span class="icon-glyph icon-github" aria-hidden="true"></span>
-          </a>
+
+          <div class="header-more-wrapper">
+            <button
+              id="btn-header-more"
+              class="icon-btn has-tooltip"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="header-more-menu"
+              data-i18n-title="header_more_btn_title"
+              title="更多功能與設定"
+              aria-label="更多功能與設定"
+            >
+              <span class="control-svg-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+                  <circle cx="5" cy="12" r="1.9" />
+                  <circle cx="12" cy="12" r="1.9" />
+                  <circle cx="19" cy="12" r="1.9" />
+                </svg>
+              </span>
+              <span class="sr-only" data-i18n="header_more_btn_title">更多功能與設定</span>
+            </button>
+
+            <div id="header-more-menu" class="header-more-menu" role="menu" hidden>
+              <div class="header-menu-group">
+                <div class="header-menu-group-label" data-i18n="header_menu_group_data">資料管理</div>
+                <button id="btn-sync-db" class="header-menu-item" role="menuitem" type="button" data-i18n-title="sync_db_title" title="立即手動同步日誌檔到 SQLite 資料庫">
+                  <span class="header-menu-item-icon" aria-hidden="true"><span class="icon-glyph icon-sync"></span></span>
+                  <span class="header-menu-item-label" data-i18n="header_menu_sync_db">立即同步資料庫</span>
+                </button>
+                <button id="btn-export-usage-day" class="header-menu-item" role="menuitem" type="button" data-i18n-title="btn_export_day_title" title="匯出目前報表範圍的資料">
+                  <span class="header-menu-item-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 3v11" />
+                      <path d="M8 10l4 4 4-4" />
+                      <path d="M4 20h16" />
+                    </svg>
+                  </span>
+                  <span class="header-menu-item-label" data-i18n="btn_export_day_title">匯出目前報表範圍的資料</span>
+                </button>
+                <button id="btn-import-usage-day" class="header-menu-item" role="menuitem" type="button" data-i18n-title="btn_import_day_title" title="匯入檔案中的所有資料">
+                  <span class="header-menu-item-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 21V10" />
+                      <path d="M8 14l4-4 4 4" />
+                      <path d="M4 4h16" />
+                    </svg>
+                  </span>
+                  <span class="header-menu-item-label" data-i18n="btn_import_day_title">匯入檔案中的所有資料</span>
+                </button>
+                <button id="btn-import-history" class="header-menu-item" role="menuitem" type="button" data-i18n-title="btn_import_history_title" title="匯入紀錄與撤銷">
+                  <span class="header-menu-item-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 12a9 9 0 1 0 3-6.7" />
+                      <path d="M3 4v6h6" />
+                      <path d="M12 7v5l3 2" />
+                    </svg>
+                  </span>
+                  <span class="header-menu-item-label" data-i18n="btn_import_history_title">匯入紀錄與撤銷</span>
+                </button>
+              </div>
+
+              <div class="header-menu-divider" role="separator"></div>
+
+              <div class="header-menu-group">
+                <div class="header-menu-group-label" data-i18n="header_menu_group_preferences">外觀與語言</div>
+                <button id="theme-toggle-btn" class="header-menu-item" role="menuitem" type="button" data-i18n-title="theme_toggle_title_dark" title="切換主題" aria-label="切換主題">
+                  <span class="header-menu-item-icon" id="theme-toggle-icon" aria-hidden="true"><span class="icon-glyph icon-theme"></span></span>
+                  <span class="header-menu-item-label" id="theme-toggle-label">切換主題</span>
+                </button>
+                <div class="header-menu-select-row">
+                  <label class="header-menu-select-label" for="lang-select">
+                    <span class="header-menu-item-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M3 12h18" />
+                        <path d="M12 3a14 14 0 0 1 0 18" />
+                        <path d="M12 3a14 14 0 0 0 0 18" />
+                      </svg>
+                    </span>
+                    <span class="header-menu-item-label" data-i18n="btn_language">語言</span>
+                  </label>
+                  <select id="lang-select" class="lang-select" aria-label="語言" title="語言">
+                    <option value="auto" data-i18n="language_auto">自動</option>
+                    <option value="zh-TW">繁體中文</option>
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en">English</option>
+                    <option value="ja">日本語</option>
+                    <option value="ko">한국어</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="header-menu-divider" role="separator"></div>
+
+              <div class="header-menu-group">
+                <div class="header-menu-group-label" data-i18n="header_menu_group_help">參考與說明</div>
+                <button id="btn-pricing-sheet" class="header-menu-item" role="menuitem" type="button" data-i18n-title="btn_pricing_sheet" title="費用標準">
+                  <span class="header-menu-item-icon" aria-hidden="true"><span class="icon-glyph icon-currency"></span></span>
+                  <span class="header-menu-item-label" data-i18n="btn_pricing_sheet">費用標準</span>
+                </button>
+                <button id="btn-setup-guide" class="header-menu-item" role="menuitem" type="button" data-i18n-title="setup_guide_title" title="前置作業啟用教學">
+                  <span class="header-menu-item-icon" aria-hidden="true"><span class="icon-glyph icon-help"></span></span>
+                  <span class="header-menu-item-label" data-i18n="setup_guide_title">前置作業啟用教學</span>
+                </button>
+                <a id="github-repo-btn" class="header-menu-item" role="menuitem" href="https://github.com/doggy8088/TokenUsageInsights" target="_blank" rel="noopener noreferrer" data-i18n-title="github_repo_title" title="GitHub Repo">
+                  <span class="header-menu-item-icon" aria-hidden="true"><span class="icon-glyph icon-github"></span></span>
+                  <span class="header-menu-item-label" data-i18n="github_repo_title">GitHub Repo</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <input id="usage-day-import-input" type="file" accept="application/json,.json" style="display: none;" />
         </div>
       </header>
 
@@ -1075,89 +1106,120 @@
     </main>
   </div>
 
-  <!-- Session Timeline Modal / Drawer -->
-  <div class="drawer-overlay" id="timeline-drawer">
-    <div class="drawer-content">
-      <div class="drawer-header">
-        <div class="drawer-title-group">
-          <span class="category" data-i18n="drawer_category">會話對話重建</span>
-          <h2 id="drawer-session-name" data-i18n="session_name">Session Name</h2>
-          <span class="session-id" id="drawer-session-id" data-i18n="session_id">Session ID</span>
-        </div>
-        <button class="close-btn" id="close-drawer-btn" data-i18n-aria-label="close" aria-label="關閉"><span class="icon-glyph icon-close" aria-hidden="true"></span></button>
+  <dialog class="drawer-content" id="timeline-drawer" aria-labelledby="drawer-session-name">
+    <header class="drawer-header">
+      <div class="drawer-title-group">
+        <h2 id="drawer-session-name" tabindex="-1" autofocus data-i18n="session_name">Session Name</h2>
+        <span class="session-id" id="drawer-session-id" data-i18n="session_id">Session ID</span>
       </div>
+      <button type="button" class="close-btn" id="close-drawer-btn" data-i18n-aria-label="close" aria-label="關閉"><span class="icon-glyph icon-close" aria-hidden="true"></span></button>
+    </header>
 
-      <div class="drawer-body">
-        <!-- Session Metadata Cards -->
-        <div class="session-meta-grid">
-          <div class="meta-item span-2">
-            <span class="lbl" data-i18n="drawer_cwd">工作路徑</span>
-            <span class="val" id="meta-cwd">-</span>
-          </div>
-          <div class="meta-item">
-            <span class="lbl" data-i18n="drawer_repo">專案庫</span>
-            <span class="val" id="meta-repo">-</span>
-          </div>
-          <div class="meta-item">
-            <span class="lbl" data-i18n="drawer_branch">Git 分支</span>
-            <span class="val" id="meta-branch">-</span>
-          </div>
-          <div class="meta-item span-2">
-            <span class="lbl" data-i18n="drawer_model">Model</span>
-            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px;">
-              <span class="val" id="meta-model" style="margin-top: 0;">-</span>
-              <span class="val" id="meta-effort" style="display: none; background: rgba(127, 142, 163, 0.15); color: #aeb9c8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">-</span>
-            </div>
-          </div>
-          <div class="meta-item" id="drawer-meta-nickname-container" style="display: none;">
-            <span class="lbl" data-i18n="assistant_nickname_label">Agent Nickname</span>
-            <span class="val" id="meta-nickname">-</span>
-          </div>
-          <div class="meta-item" id="drawer-meta-role-container" style="display: none;">
-            <span class="lbl" data-i18n="assistant_role_label">Agent Role</span>
-            <span class="val" id="meta-role">-</span>
-          </div>
+    <div class="chat-toolbar">
+      <div class="chat-toolbar-main">
+        <div class="chat-search" role="search" data-i18n-aria-label="drawer_search" aria-label="搜尋此對話">
+          <span class="icon-glyph icon-search" aria-hidden="true"></span>
+          <label class="sr-only" for="timeline-search-input" data-i18n="drawer_search">搜尋此對話</label>
+          <input id="timeline-search-input" type="search" autocomplete="off" spellcheck="false" data-i18n-placeholder="drawer_search" placeholder="搜尋此對話" aria-controls="timeline-items" disabled>
+          <button type="button" class="chat-search-clear" id="timeline-search-clear" data-i18n-aria-label="drawer_search_clear" aria-label="清除搜尋" hidden>
+            <span class="icon-glyph icon-close" aria-hidden="true"></span>
+          </button>
         </div>
-
-        <!-- Session Token Stats Cards -->
-        <div class="session-stats-grid">
-          <div class="meta-item stat-item">
-            <span class="lbl" data-i18n="drawer_input">輸入</span>
-            <span class="val" id="meta-input">-</span>
-          </div>
-          <div class="meta-item stat-item">
-            <span class="lbl" data-i18n="drawer_output">輸出</span>
-            <span class="val" id="meta-output">-</span>
-          </div>
-          <div class="meta-item stat-item">
-            <span class="lbl" data-i18n="drawer_reasoning">推理</span>
-            <span class="val" id="meta-reasoning">-</span>
-          </div>
-          <div class="meta-item stat-item">
-            <span class="lbl" data-i18n="drawer_cache">快取</span>
-            <span class="val" id="meta-cache">-</span>
-          </div>
-          <div class="meta-item stat-item">
-            <span class="lbl" data-i18n="drawer_compaction">壓縮次數</span>
-            <span class="val" id="meta-compaction">-</span>
-          </div>
-          <div class="meta-item stat-item highlight">
-            <span class="lbl" data-i18n="drawer_total">總計</span>
-            <span class="val" id="meta-tokens">-</span>
-          </div>
-          <div class="meta-item stat-item cost-item">
-            <span class="lbl" data-i18n="drawer_cost">估算費用</span>
-            <span class="val" id="meta-cost">-</span>
-          </div>
-        </div>
-
-        <!-- Reconstructed Timeline -->
-        <div class="timeline-container" id="timeline-items">
-          <!-- Timeline bubbles will be dynamically rendered here -->
-        </div>
+        <label class="chat-option">
+          <input id="timeline-chat-only" type="checkbox" checked>
+          <span data-i18n="drawer_chat_only">僅顯示對話</span>
+        </label>
+        <label class="chat-option">
+          <input id="timeline-metadata" type="checkbox" checked>
+          <span data-i18n="drawer_time_tokens">時間與 Token</span>
+        </label>
       </div>
+      <fieldset class="chat-toolbar-options" id="timeline-detail-options" hidden>
+        <legend class="sr-only" data-i18n="drawer_detail_options">詳細記錄篩選</legend>
+        <label class="chat-option">
+          <input id="timeline-tools" type="checkbox" checked>
+          <span data-i18n="drawer_tools">工具</span>
+        </label>
+        <label class="chat-option">
+          <input id="timeline-reasoning" type="checkbox" checked>
+          <span data-i18n="drawer_reasoning_text">推理文字</span>
+        </label>
+        <label class="chat-option">
+          <input id="timeline-system" type="checkbox" checked>
+          <span data-i18n="drawer_system">系統訊息</span>
+        </label>
+      </fieldset>
     </div>
-  </div>
+
+    <div class="drawer-body" tabindex="0" role="region" data-i18n-aria-label="drawer_category" aria-label="會話對話重建">
+      <details class="chat-session-details" id="timeline-session-details">
+        <summary data-i18n="drawer_session_details">會話詳細資料</summary>
+        <dl class="session-meta-grid">
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_cwd">工作路徑</dt>
+            <dd class="val" id="meta-cwd">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_model">Model</dt>
+            <dd class="chat-session-model">
+              <span class="val" id="meta-model">-</span>
+              <span class="val" id="meta-effort" hidden></span>
+            </dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_repo">專案庫</dt>
+            <dd class="val" id="meta-repo">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_branch">Git 分支</dt>
+            <dd class="val" id="meta-branch">-</dd>
+          </div>
+          <div class="meta-item" id="drawer-meta-nickname-container" hidden>
+            <dt class="lbl" data-i18n="assistant_nickname_label">Agent Nickname</dt>
+            <dd class="val" id="meta-nickname">-</dd>
+          </div>
+          <div class="meta-item" id="drawer-meta-role-container" hidden>
+            <dt class="lbl" data-i18n="assistant_role_label">Agent Role</dt>
+            <dd class="val" id="meta-role">-</dd>
+          </div>
+        </dl>
+
+        <dl class="session-stats-grid">
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_input">輸入</dt>
+            <dd class="val" id="meta-input">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_output">輸出</dt>
+            <dd class="val" id="meta-output">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_reasoning">推理</dt>
+            <dd class="val" id="meta-reasoning">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_cache">快取</dt>
+            <dd class="val" id="meta-cache">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_compaction">壓縮次數</dt>
+            <dd class="val" id="meta-compaction">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_total">總計</dt>
+            <dd class="val" id="meta-tokens">-</dd>
+          </div>
+          <div class="meta-item">
+            <dt class="lbl" data-i18n="drawer_cost">估算費用</dt>
+            <dd class="val" id="meta-cost">-</dd>
+          </div>
+        </dl>
+      </details>
+
+      <p class="chat-status" id="timeline-status" role="status"></p>
+      <ol class="timeline-container" id="timeline-items" role="list"></ol>
+    </div>
+  </dialog>
 
   <!-- Setup Guide Modal -->
   <div class="modal-overlay" id="setup-guide-modal">
@@ -1168,16 +1230,17 @@
             <span class="icon-glyph icon-chevron-left" aria-hidden="true"></span>
             <span data-i18n="setup_back_to_sources">返回資料來源</span>
           </button>
-          <h2 id="setup-modal-title" data-i18n="setup_modal_title">Antigravity CLI 本機資料來源</h2>
+          <h2 id="setup-modal-title" data-i18n="setup_modal_title">Antigravity 本機資料來源</h2>
         </div>
         <button class="close-btn" id="close-setup-modal-btn" data-i18n-aria-label="close" aria-label="關閉"><span class="icon-glyph icon-close" aria-hidden="true"></span></button>
       </div>
       <!-- Antigravity native session data -->
       <div class="modal-body" id="setup-body-antigravity" style="display: none;">
-        <p class="modal-text" data-i18n="antigravity_setup_modal_intro">本看板直接讀取 Antigravity CLI 的原生會話記錄，不需要設定 Status Line 或安裝收集腳本。</p>
+        <p class="modal-text" data-i18n="antigravity_setup_modal_intro">本看板直接讀取 Antigravity 的原生會話記錄，不需要設定 Status Line 或安裝收集腳本。CLI 與桌面 App 的用量會合併在同一個 Agent 下，並以「CLI」與「App」標示來源。</p>
         <div class="modal-section">
           <h3 data-i18n="antigravity_source_title">會話記錄位置</h3>
           <p class="modal-text"><span data-i18n="antigravity_source_path">目前偵測到的資料路徑：</span> <code id="lbl-detected-home-antigravity">~/.gemini/antigravity-cli/brain</code></p>
+          <p class="modal-text"><span data-i18n="antigravity_app_source_path">Antigravity App 資料路徑：</span> <code id="lbl-detected-home-antigravity-app">~/.gemini/antigravity/brain</code></p>
           <div class="code-block-container"><pre><code>brain/&lt;session-id&gt;/.system_generated/logs/transcript_full.jsonl
 conversations/&lt;session-id&gt;.db</code></pre></div>
         </div>
@@ -1516,7 +1579,7 @@ cd TokenUsageInsights</code></pre>
           <span data-i18n="import_target_assistant">匯入目標 Agent</span>
           <select id="usage-import-target-assistant" class="premium-select">
             <option value="" data-i18n="import_target_placeholder">請明確選擇目標 Agent</option>
-            <option value="antigravity">Antigravity CLI</option>
+            <option value="antigravity">Antigravity</option>
             <option value="copilot">GitHub Copilot</option>
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
@@ -1551,10 +1614,112 @@ cd TokenUsageInsights</code></pre>
     </div>
   </div>
 
+  <!-- Global Keyword Search Dialog -->
+  <dialog id="global-search-dialog" class="global-search-dialog" aria-labelledby="global-search-title">
+    <div class="global-search-shell">
+      <div class="global-search-header">
+        <h2 id="global-search-title" class="sr-only" data-i18n="global_search_title">全域關鍵字搜尋</h2>
+        <div class="global-search-input-row" role="search">
+          <span class="icon-glyph icon-search global-search-leading-icon" aria-hidden="true"></span>
+          <input
+            id="global-search-input"
+            type="search"
+            maxlength="256"
+            autocomplete="off"
+            spellcheck="false"
+            data-i18n-placeholder="global_search_placeholder"
+            data-i18n-aria-label="global_search_title"
+            placeholder="搜尋歷史提示詞、AI 回應或工具紀錄…"
+            aria-label="搜尋歷史提示詞、AI 回應或工具紀錄"
+          >
+          <button type="button" id="btn-global-search-clear" class="global-search-clear-btn" data-i18n-aria-label="global_search_clear" aria-label="清除關鍵字" hidden>
+            <span class="icon-glyph icon-close" aria-hidden="true"></span>
+          </button>
+          <kbd class="global-search-kbd">ESC</kbd>
+          <button type="button" id="btn-global-search-close" class="close-btn" data-i18n-aria-label="close" aria-label="關閉">
+            <span class="icon-glyph icon-close" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <div class="global-search-controls">
+          <div class="global-search-scopes" role="group" data-i18n-aria-label="global_search_scope_label" aria-label="搜尋範圍">
+            <span class="global-search-control-label" data-i18n="global_search_scope_label">搜尋範圍：</span>
+            <label class="search-scope-chip">
+              <input type="checkbox" name="global-search-scope" value="user_prompt" checked>
+              <span data-i18n="global_search_scope_user_prompt">使用者提示詞</span>
+            </label>
+            <label class="search-scope-chip">
+              <input type="checkbox" name="global-search-scope" value="agent_reply">
+              <span data-i18n="global_search_scope_agent_reply">AI 回應（含思考過程）</span>
+            </label>
+            <label class="search-scope-chip">
+              <input type="checkbox" name="global-search-scope" value="tool_request">
+              <span data-i18n="global_search_scope_tool_request">工具請求 (Request)</span>
+            </label>
+            <label class="search-scope-chip">
+              <input type="checkbox" name="global-search-scope" value="tool_response">
+              <span data-i18n="global_search_scope_tool_response">工具回應 (Response)</span>
+            </label>
+          </div>
+
+          <div class="global-search-filters">
+            <label class="global-search-filter-field">
+              <span class="global-search-control-label" data-i18n="global_search_assistant_label">Agent：</span>
+              <select id="global-search-assistant" class="premium-select-mini">
+                <option value="all" data-i18n="all_agents_label">全部 Agent</option>
+                <option value="antigravity">Antigravity</option>
+                <option value="copilot">GitHub Copilot</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude Code</option>
+                <option value="cursor">Cursor</option>
+                <option value="grok">Grok Build</option>
+                <option value="pi">Pi Coding Agent</option>
+                <option value="omp">OMP</option>
+                <option value="muse">Muse</option>
+                <option value="mcode">MiniMax Code</option>
+              </select>
+            </label>
+
+            <label class="global-search-filter-field">
+              <span class="global-search-control-label" data-i18n="global_search_date_label">時間：</span>
+              <select id="global-search-date-preset" class="premium-select-mini">
+                <option value="all" data-i18n="global_search_date_all">全部時間</option>
+                <option value="7d" data-i18n="global_search_date_7d">最近 7 天</option>
+                <option value="30d" data-i18n="global_search_date_30d">最近 30 天</option>
+                <option value="custom" data-i18n="global_search_date_custom">自訂區間</option>
+              </select>
+            </label>
+
+            <div id="global-search-custom-dates" class="global-search-custom-dates" hidden>
+              <input type="date" id="global-search-date-from" class="premium-date-input" data-i18n-aria-label="global_search_date_from" aria-label="開始日期">
+              <span aria-hidden="true">~</span>
+              <input type="date" id="global-search-date-to" class="premium-date-input" data-i18n-aria-label="global_search_date_to" aria-label="結束日期">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="global-search-status-bar">
+        <span id="global-search-status" class="global-search-status" aria-live="polite" data-i18n="global_search_hint_empty">輸入關鍵字以搜尋歷史對話紀錄</span>
+        <span id="global-search-index-notice" class="global-search-index-notice" hidden>
+          <span id="global-search-index-text"></span>
+          <button type="button" id="btn-global-search-retry" class="global-search-retry-btn" data-i18n="global_search_retry">重新搜尋</button>
+        </span>
+      </div>
+
+      <div class="global-search-body">
+        <ul id="global-search-results" class="global-search-results" role="listbox" data-i18n-aria-label="global_search_title" aria-label="搜尋結果"></ul>
+        <div id="global-search-footer" class="global-search-footer" hidden>
+          <button type="button" id="btn-global-search-more" class="secondary-btn" data-i18n="global_search_load_more">載入更多</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Sidebar Overlay for mobile -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
   <!-- Frontend Javascript logic -->
-  <script type="module" src="/static/app.js?v=71"></script>
+  <script type="module" src="/static/app.js?v=84"></script>
 </body>
 </html>
