@@ -2,7 +2,144 @@
 
 本文件記錄 TokenUsageInsights 各正式版本的實際變更。內容依 Git 標籤間的提交記錄與檔案差異整理，格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本編號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## [未發行]
+## [1.10.0] - 2026-11-25
+
+本次 minor release 讓看板同時收集 Antigravity 桌面 App 的原生會話，並與 Antigravity CLI 合併在同一個 Agent 下，以「CLI」與「App」標籤標示來源。
+
+### 新增與改善
+
+- **Antigravity App 原生會話自動收集**：看板現在會直接讀取桌面版 `~/.gemini/antigravity/brain/<session-id>/.system_generated/logs/transcript_full.jsonl` 與 `conversations/<session-id>.db`，與 Antigravity CLI 共用同一套會話解析、模型對應與費用估算邏輯，不需要安裝收集腳本或設定 Status Line。
+- **CLI 與 App 合併呈現並標示來源**：兩種來源的用量歸在同一個 Antigravity Agent 之下，會話列表以「CLI」與「App」標籤區分；同一 `session_id` 若同時存在於兩邊，會各自保留為獨立會話，不會被合併或重複計算。前置作業教學與「全部 Agent」來源清單也會同時顯示 CLI 與 App 的資料路徑。
+- 新增 `ANTIGRAVITY_APP_DIR` 環境變數（預設 `~/.gemini/antigravity`）與 `additional_sources.antigravity_app` 設定鍵，可指定其他電腦或雲端同步的 App 資料目錄。
+
+### 變更
+
+- Agent 顯示名稱由「Antigravity CLI」改為「Antigravity」（比照 GitHub Copilot 使用產品名），五語系介面、分頁提示、匯出／匯入選單與五份 README 同步更新；CLI 與 App 的差異改由來源標籤呈現。
+
+### 資料影響
+
+- 一次性遷移 `migration:antigravity_app_split_v1`：若過去曾把 App 目錄加入 `additional_sources.antigravity`，該目錄以 `antigravity-session` 寫入的會話列與來源登記會在升級後刪除，並由 App 收集器以 `antigravity-app` 重新匯入，避免同一份用量被計兩次。
+- App 收集器使用 `antigravity_app:` 開頭的 `sync_state` 游標，與既有 CLI 的 `antigravity:` 游標互不干擾；既有 CLI 資料與游標不需重建。
+
+### 相容性
+
+- 匯出／匯入、`/api/antigravity/*` 與 `--agent antigravity` 維持不變，兩種來源都會一併涵蓋。
+- 若曾把 App 資料複製到非預設路徑（不是 `~/.gemini/antigravity`）並加進 `additional_sources.antigravity`，遷移無法自動辨識該複本，請手動移除該設定，改列於 `additional_sources.antigravity_app`，以免重複計算。
+- `~/.gemini/antigravity-ide`（Antigravity IDE）目前仍不在收集範圍內。
+
+## [1.9.0] - 2026-11-25
+
+本次 minor release 新增跨全歷史對話內容關鍵字搜尋功能（SQLite FTS5 trigram 增量索引），並將看板右上角工具列極簡整理為「全域搜尋」與「⋯ 更多選單」。
+
+### 新增與改善
+
+- **跨全歷史關鍵字搜尋（SQLite 增量全文索引）**：新增全域關鍵字搜尋視窗（點擊右上角搜尋按鈕或按 `⌘K`／`Ctrl+K` 開啟），預設僅搜尋使用者提示詞，並提供獨立選項勾選「AI 回應（含思考過程）」、「工具請求 (Request)」與「工具回應 (Response)」。支援預設跟隨目前 Agent 或切換「全部 Agent」、時間區間篩選（全部時間／最近 7 天／最近 30 天／自訂區間）、分頁載入更多、UTF-8 安全三段式高亮片段與鍵盤導覽。
+- **搜尋結果一鍵跳轉時間軸並高亮定位**：點選任一搜尋結果可直接開啟對應會話的對話抽屜（Timeline Drawer）；若命中項目位於工具呼叫或推理區塊，會自動展開詳細內容並捲動至可視範圍中央加上高亮動畫，同時保留每日會話列表既有的單日 USER 提示詞快速篩選框。
+- **SQLite FTS5 trigram 增量索引與背景同步**：於背景與手動同步時依會話檔案 `size` 與 `mtime`（含 MiniMax Code 多檔目錄聚合簽章）增量維護全文搜尋索引並自動清理孤兒紀錄；針對 3 字元以上中英文查詢走 FTS5 trigram、1–2 字元短詞自動退回精準比對，同時新增 `GET /api/:assistant/search` API。
+
+### 變更
+
+- **右上角工具列極簡收攏**：右上角固定僅保留「全域搜尋」與「`⋯` 更多選單」兩顆按鈕；原有的手動同步資料庫、匯出／匯入／匯入紀錄、主題切換、語言選擇、費用標準、前置作業教學與 GitHub 連結依「資料管理」、「外觀與語言」、「參考與說明」分組收攏至 `⋯` 子選單，並同步補齊五語系介面翻譯。
+
+### 資料影響
+
+- 本機 SQLite 資料庫於啟動初始化時自動新增 `search_indexed_files`、`search_documents`、`search_documents_fts`（FTS5 trigram）資料表與同步觸發器；首次升級後會於背景自動為既有本機會話建立增量搜尋索引，並對單筆過長文字與工具輸出進行上限截斷（提示詞／AI 回應 32,768 字元、工具請求／回應 16,384 字元）。
+
+### 相容性
+
+- **向後相容**：新增資料表與索引皆於既有 SQLite 資料庫就地建立，原有統計查詢、單日 `/api/:assistant/usage/:date/session-search` 端點、CLI 指令、環境變數與安裝流程均維持相容。
+
+## [1.8.2] - 2026-11-22
+
+本次更新補齊 GPT-6.2 Sol、GPT-6.2 Astra 與 Antigravity Orchestrator (Neon) 的費用估算，並讓每日定價檢查能為新收錄的 OpenAI 模型提出定價 PR。
+
+### 新增與改善
+
+- 每日定價檢查偵測到 OpenAI 新模型時，會依官方標準價表、Batch 價表與模型頁的長上下文門檻自動產生 `pricing.csv` 價格列。產生後先執行 Node 與 Rust 定價測試，再重新檢查新增模型是否仍被列為缺漏、是否出現新的價格差異。驗證通過後，使用 `automation/pricing-update` 分支開啟或更新 PR。資料不完整的模型與價格差異仍會列在 issue 中。
+- 定價檢查報告內容有變化時，會在既有 issue 留下 comment 以發送通知；檢查結果沒有待處理項目時，自動關閉 `pricing-drift` issue。
+
+### 修正
+
+- 補上 GPT-6.2 Sol 與 GPT-6.2 Astra 的計價規則，修正 `gpt-6.2-sol`、`gpt-6.2-astra` 會話出現「找不到可用的模型價格規則」而無法估算成本的問題。每百萬 Token 的短上下文標準費率依序為輸入、快取輸入、輸出：GPT-6.2 Sol 2.00、0.10、10.00 美元，GPT-6.2 Astra 8.00、0.40、40.00 美元。輸入與快取讀取超過 272,000 Token 時改用長上下文費率：GPT-6.2 Sol 4.00、0.20、15.00 美元，GPT-6.2 Astra 16.00、0.80、60.00 美元。[OpenAI API 定價](https://developers.openai.com/api/docs/pricing)
+- 新增 Antigravity `Orchestrator (Neon)` 的計價規則，依預設 planner Gemini 4 Neon 的標準費率計算：每百萬 Token 輸入 3.00、快取輸入 0.15、輸出 15.00 美元。Antigravity 模型 ID `gemini-pro-orchestrator-neon` 也會對應到此規則，不再以原始 ID 顯示。[Antigravity 模型文件](https://antigravity.google/docs/models#orchestrator)
+- 每日定價檢查改為支援 Antigravity 新版 Orchestrator 文件格式（Role／Supported models 表格），修正官方頁面改版後持續回報「解析不到 Antigravity Orchestrator 對應表」的問題。
+
+## [1.8.1] - 2026-11-20
+
+本次更新補上 Gemini 4 Neon 的費用估算，並修正兩張 Codex 每日報表文件截圖的檔案格式。
+
+### 新增與改善
+
+- 新增 Gemini 4 Neon 及 Low、Medium、High、Extra 思考層級的計價規則。每百萬 Token 的標準費率為輸入 3.00、快取輸入 0.15、輸出 15.00 美元。批次 API 費率依序為 1.50、0.075、7.50 美元。[Google Gemini API 定價](https://ai.google.dev/gemini-api/docs/pricing#gemini-4-neon)
+
+### 修正
+
+- 將兩張副檔名為 `.png` 的 Codex 每日報表文件截圖從 JPEG 轉為有效的 PNG。
+
+## [1.8.0] - 2026-11-20
+
+本次 minor release 將會話詳情改成可搜尋的聊天介面，並在側欄提供四個統計期間快選按鈕。
+
+### 新增與改善
+
+- **聊天式會話檢視**：依日誌順序顯示訊息，使用者提問靠右，助理回覆靠左。長訊息提供六行預覽與展開操作，保留附件、Markdown 渲染與複製功能。支援鍵盤操作、深淺色主題及五種語言。
+- **會話內搜尋與顯示控制**：搜尋完整提問及回覆，並在長訊息中顯示命中摘錄。預設顯示對話，可另外開啟工具、推理與系統訊息，或切換時間與 Token。瀏覽器會記住顯示偏好。
+- **在日誌提供資料時顯示會話細節**：補上回覆的獨立推理欄位、耗時及工具狀態。Codex 可查看已記錄的系統指示、開發者指示與可讀的推理摘要。Antigravity 會區分使用者提問與代理間訊息。
+
+### 變更
+
+- **期間快速切換**：側欄以「每日、月度、年度、區間」四個按鈕取代下拉選單，並以底線標示目前的報表。
+- 助理回覆標籤只顯示名稱，例如 `MINIMAX CODE`、`CLAUDE CODE` 和 `CODEX`。
+
+### 修正
+
+- **Claude Code 重複對話**：會話解析排除 `api-request-blob` 請求快照，避免重播的訊息與工具事件重複出現，並保留真正發出、內容相同的回覆。
+- **舊版後端的會話回覆**：前端支援舊版 `reply` 欄位，並將欄位內的推理與正文分開，讓「僅顯示對話」仍可閱讀及搜尋回覆。
+- **快速切換統計期間**：延遲抵達的報表回應不會覆蓋目前報表的標題、資料或載入狀態。
+
+### 相容性
+
+- 會話詳情 API 保留既有欄位並新增結構化對話資料。可以直接使用既有 SQLite 資料庫，CLI、環境變數與安裝流程沿用原有介面。
+
+## [1.7.0] - 2026-11-15
+
+### 新增與改善
+
+- **補齊 Antigravity 與新模型官方定價規則**（#85）：
+  - 補上 `Claude Fable 5.2` 與 `Claude Mythos 5.2`（含 `Cursor` 部署條目）的官方標準定價規則（輸入 `8.00`、快取輸入 `0.20`、輸出 `40.00` 美元／每百萬 Token）。
+  - 補上 `Orchestrator (Carbon)` 與 `Orchestrator (Argon)` 的 `Google AI` 官方標準定價規則（依各自規劃模型標準價設定為輸入 `4.00`、快取輸入 `0.20`、輸出 `20.00` 美元／每百萬 Token）。
+- **Antigravity CLI 模型別名正規化與統一映射**（#85）：
+  - 補齊透過 `agy models` 與會話實測查證的模型顯示名稱對應，包含 `Gemini 4 Hydrogen (Low/Medium/High/XHigh)`、`Orchestrator (Carbon)`、`Orchestrator (Argon)`、`gemini-flash-worker-agy`（對應 `Gemini 4 Hydrogen`）、`Claude Opus 5.5 (Low/Medium/High)`、`Claude Sonnet 5.5 (Low/Medium/High)` 與 `GPT-OSS 120B (Medium)`。
+  - 對 JSONL 明確 `model_id`/`model`、hook 紀錄與匯入紀錄（`insert_imported_entries`）統一套用別名映射。
+- **Copilot App 事件檔補匯與逐次呼叫對帳**（#74）：
+  - 新增 Copilot App `events.jsonl`（`session.usage_record`）來源限定同步，與 `session-store.db` 及 `data.db.sessions` 進行保守的逐次呼叫對帳與合併，補齊僅寫入事件檔的新 session 與游標超前時遺漏的歷史用量，並保留主從 Agent 歸屬與原生推理強度。
+- **匯入衝突三向裁決與前端可見性、搜尋與渲染效能強化**（#74）：
+  - 資料匯入改為依回合覆蓋範圍進行三向裁決去重，支援家族代表權判定，避免跨回合歷史被誤判重複，並於匯入批次中記錄跳過衝突筆數（於五語系前端介面顯示）。
+  - 前端 Session 表改用預建父層索引消除二次方掃描，並強化 Prompt 搜尋於即時資料刷新／背景重排期間的穩定性與成長指紋追蹤。
+
+### 變更
+
+- **每日定價檢查腳本聚焦 Antigravity 支援模型**（#83、#85）：
+  - 將原本泛稱的 `Google Gemini` 來源項目改為針對 `Antigravity`：結合 Antigravity 官方模型文件（`antigravity.google/docs/models.md`）與 Google AI Studio 官方定價頁（`aistudio.google.com/docs/pricing.md`），僅對 Antigravity 官方支援模型檢查收錄完整性、逐一驗證每個 Orchestrator 的 Planner 對應與一般 Google AI 模型（除明確標記於 `unpricedModels` 的 `Gemini 3.7 Flash` 與非 Google 模型外）的官方標準價格解析是否成功，同時核對所有 `Google AI` 部署列的標準牌價。
+
+### 修正
+
+- **每日定價檢查與 Markdoc／括號解析修正**（#83、#85）：
+  - 修正 Google AI Studio 官方定價頁新版 Markdoc 格式（`{% tab title="Standard" %}` / `{% table %}`）與跨行促銷價解析，並修正 Anthropic retired 模型巢狀括號備註的 `officialKey` 正規化處理，消除誤報。
+- **Copilot App／CLI 總量計算、會話身分隔離與時間軸回合歸屬修正**（#74）：
+  - 修正 Copilot App 用量總量將 `cache_write` 與 `reasoning` 額外重加導致偏高的問題，統一為來源 raw `input + output`（保留 `cache` 與 `reasoning` 明細）；並改採依涵蓋範圍聚合耗時。
+  - 徹底分離獨立 session 與合成子 Agent 身分，將正規化後的 `parent_session_id` 納入 `usage_entries` 唯一索引與搜尋指紋，並修正 Codex `parent_thread_id` 正規化與匯入批次回合細節 API 查詢。
+  - 修正時間軸回覆訊息累計用量計算（含同時間戳呼叫順序、無專屬事件子 Agent 的共享提示邊界推算、缺欄衝突一秒配對窗及撤銷匯入批次後本機事件未重建問題）。
+
+### 資料影響
+
+- SQLite `import_batches` 新增 `skipped_conflicts INTEGER NOT NULL DEFAULT 0` 欄位，記錄匯入時略過的衝突筆數。
+- `usage_entries` 唯一索引納入正規化 `parent_session_id`，並透過一次性資料庫遷移完成既有 Copilot 父層碰撞與 ID／父層空白正規化（v1–v3）、Codex `parent_thread_id` 重解析（`v10`），以及 Antigravity 模型別名正規化（`migration:antigravity_model_labels_v1`）。
+- Copilot App 與 Antigravity（`PARSER_VERSION` 升至 5）會在啟動同步時自動對既有資料執行冪等對帳與重歸屬修正，不遺失歷史紀錄。
+
+### 相容性
+
+- **向後相容**：所有資料表結構變更、索引更新與一次性遷移皆於既有 SQLite 資料庫就地自動完成，無破壞性 API、CLI 參數或環境變數異動；匯入／匯出 JSON 與既有多助理儀表板介面完全相容。
 
 ## [1.6.7] - 2026-11-13
 
@@ -480,7 +617,6 @@
 
 - 同一 Session ID 的不同 rollout 檔案（續傳分段）改為各自保留資料列，報表由既有 Session 身分模型自動合併，每日、每月、年度、模型明細與時間軸的計算結果維持一致或更完整。
 - 匯出／匯入格式新增選用的 `usage_identity` 欄位；缺少該欄位的既有匯出檔仍可正常匯入。
-
 
 ## [1.0.1] - 2026-09-20
 
@@ -1167,7 +1303,10 @@
 - 修正行動版側邊欄遮擋、黑畫面、標題擠壓、圖表導覽索引與年度版面問題。
 - 修正並補齊多個 Gemini、Claude、GPT 與 GPT-OSS 模型的定價規則。
 
-[未發行]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.7...HEAD
+[未發行]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.8.0...v1.8.1
+[1.8.0]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.7.0...v1.8.0
+[1.7.0]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.7...v1.7.0
 [1.6.7]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.6...v1.6.7
 [1.6.6]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.5...v1.6.6
 [1.6.5]: https://github.com/doggy8088/TokenUsageInsights/compare/v1.6.4...v1.6.5

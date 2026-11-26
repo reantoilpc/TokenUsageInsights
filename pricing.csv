@@ -61,6 +61,11 @@ Gemini 4 Hydrogen (Low),Google AI,1M Tokens,1.50,0.075,7.50,0.75/0.0375/3.75
 Gemini 4 Hydrogen (Medium),Google AI,1M Tokens,1.50,0.075,7.50,0.75/0.0375/3.75
 Gemini 4 Hydrogen (High),Google AI,1M Tokens,1.50,0.075,7.50,0.75/0.0375/3.75
 Gemini 4 Hydrogen (Extra),Google AI,1M Tokens,1.50,0.075,7.50,0.75/0.0375/3.75
+Gemini 4 Neon,Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
+Gemini 4 Neon (Low),Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
+Gemini 4 Neon (Medium),Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
+Gemini 4 Neon (High),Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
+Gemini 4 Neon (Extra),Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
 Gemini 4 Carbon,Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
 Gemini 4 Carbon (Medium),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
 Gemini 4 Carbon (High),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
@@ -69,6 +74,9 @@ Gemini 4 Argon,Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
 Gemini 4 Argon (Medium),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
 Gemini 4 Argon (High),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
 Gemini 4 Argon (Low),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
+Orchestrator (Carbon),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
+Orchestrator (Argon),Google AI,1M Tokens,4.00,0.20,20.00,2.00/0.10/10.00
+Orchestrator (Neon),Google AI,1M Tokens,3.00,0.15,15.00,1.50/0.075/7.50
 Gemini 3.8 Flash,Google AI,1M Tokens,1.50,0.15,7.50,0.75/0.075/3.75
 Gemini 3.8 Flash (Medium),Google AI,1M Tokens,1.50,0.15,7.50,0.75/0.075/3.75
 Gemini 3.8 Flash (High),Google AI,1M Tokens,1.50,0.15,7.50,0.75/0.075/3.75
@@ -102,6 +110,12 @@ GPT-OSS 120B (Medium),Local/OSS,1M Tokens,0.00,0.00,0.00,N/A
 GPT-6 Astra (<272k),Global,1M Tokens,10.00,1.00,50.00,5.00/0.50/25.00
 GPT-6 Astra (>272k),Global,1M Tokens,20.00,2.00,75.00,10.00/1.00/37.50
 GPT-6 Astra,Global,1M Tokens,10.00,1.00,50.00,5.00/0.50/25.00
+GPT-6.2 Astra (<272k),Global,1M Tokens,8.00,0.40,40.00,4.00/0.20/20.00
+GPT-6.2 Astra (>272k),Global,1M Tokens,16.00,0.80,60.00,8.00/0.40/30.00
+GPT-6.2 Astra,Global,1M Tokens,8.00,0.40,40.00,4.00/0.20/20.00
+GPT-6.2 Sol (<272k),Global,1M Tokens,2.00,0.10,10.00,1.00/0.05/5.00
+GPT-6.2 Sol (>272k),Global,1M Tokens,4.00,0.20,15.00,2.00/0.10/7.50
+GPT-6.2 Sol,Global,1M Tokens,2.00,0.10,10.00,1.00/0.05/5.00
 GPT-6.1 Sol (<272k),Global,1M Tokens,2.00,0.10,10.00,1.00/0.05/5.00
 GPT-6.1 Sol (>272k),Global,1M Tokens,4.00,0.20,15.00,2.00/0.10/7.50
 GPT-6.1 Sol,Global,1M Tokens,2.00,0.10,10.00,1.00/0.05/5.00
@@ -137,6 +151,8 @@ Claude Haiku 5.5 (<100k),Global,1M Tokens,0.10,0.01,0.50,N/A
 Claude Haiku 5.5 (>100k),Global,1M Tokens,0.50,0.05,2.50,N/A
 Claude Haiku 5.5,Global,1M Tokens,0.10,0.01,0.50,N/A
 Claude Haiku 4.5,Global,1M Tokens,1.00,0.10,5.00,N/A
+Claude Fable 5.2,Global,1M Tokens,8.00,0.20,40.00,N/A
+Claude Mythos 5.2,Global,1M Tokens,8.00,0.20,40.00,N/A
 Claude Fable 5,Global,1M Tokens,10.00,1.00,50.00,N/A
 Claude Opus 5.5-fast,Global,1M Tokens,8.00,0.40,40.00,N/A
 Claude Opus 5.5,Global,1M Tokens,4.00,0.20,20.00,N/A
@@ -225,6 +241,8 @@ gpt-5.4,Cursor,1M Tokens,2.50,0.25,15.00,N/A
 gpt-5.4-mini,Cursor,1M Tokens,0.75,0.075,4.50,N/A
 gpt-5.5,Cursor,1M Tokens,5.00,0.50,30.00,N/A
 gpt-6-astra,Cursor,1M Tokens,10.00,1.00,50.00,N/A
+gpt-6.2-astra,Cursor,1M Tokens,8.00,0.40,40.00,N/A
+gpt-6.2-sol,Cursor,1M Tokens,2.00,0.10,10.00,N/A
 gpt-6.1-sol,Cursor,1M Tokens,2.00,0.10,10.00,N/A
 gpt-6.1-terra,Cursor,1M Tokens,1.00,0.05,5.00,N/A
 gpt-6-sol,Cursor,1M Tokens,2.00,0.20,10.00,N/A
@@ -238,6 +256,8 @@ claude-4-sonnet,Cursor,1M Tokens,3.00,0.30,15.00,N/A
 claude-4-sonnet-1m,Cursor,1M Tokens,3.00,0.30,15.00,N/A
 claude-haiku-5-5,Cursor,1M Tokens,0.10,0.01,0.50,N/A
 claude-4-5-haiku,Cursor,1M Tokens,1.00,0.10,5.00,N/A
+claude-fable-5-2,Cursor,1M Tokens,8.00,0.20,40.00,N/A
+claude-mythos-5-2,Cursor,1M Tokens,8.00,0.20,40.00,N/A
 claude-fable-5,Cursor,1M Tokens,10.00,1.00,50.00,N/A
 claude-opus-5-5-fast,Cursor,1M Tokens,8.00,0.40,40.00,N/A
 claude-opus-5-5,Cursor,1M Tokens,4.00,0.20,20.00,N/A
